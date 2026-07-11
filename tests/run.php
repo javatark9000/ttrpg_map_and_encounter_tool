@@ -1,0 +1,49 @@
+<?php
+declare(strict_types=1);
+
+require dirname(__DIR__).'/src/bootstrap.php';
+
+use Dnd\Auth;
+use Dnd\Database;
+use Dnd\GameService;
+
+$tests=0;$db=Database::connection();$game=new GameService($db);$suffix=bin2hex(random_bytes(4));$userIds=[];$scenarioId=0;
+function ok(bool $condition,string $message): void {global $tests;$tests++;if(!$condition)throw new RuntimeException("FALLÓ: $message");echo "✓ $message\n";}
+function req(): string {return bin2hex(random_bytes(16));}
+try {
+    $campaign=(int)$db->query('SELECT id FROM campaigns ORDER BY id LIMIT 1')->fetchColumn();ok($campaign>0,'existe una campaña inicial');
+    $addUser=$db->prepare('INSERT INTO users(name,email,password_hash,role) VALUES (?,?,?,?)');
+    $addUser->execute(['DM prueba',"dm-$suffix@example.test",password_hash('password123',PASSWORD_DEFAULT),'DM']);$dmId=(int)$db->lastInsertId();$userIds[]=$dmId;
+    $addUser->execute(['Jugador prueba',"player-$suffix@example.test",password_hash('password123',PASSWORD_DEFAULT),'PLAYER']);$playerId=(int)$db->lastInsertId();$userIds[]=$playerId;
+    $member=$db->prepare('INSERT INTO campaign_members(campaign_id,user_id) VALUES (?,?)');$member->execute([$campaign,$dmId]);$member->execute([$campaign,$playerId]);
+    $db->prepare('INSERT INTO player_characters(owner_id,campaign_id,name,max_health) VALUES (?,?,?,?)')->execute([$playerId,$campaign,'Héroe',20]);$characterId=(int)$db->lastInsertId();
+    $db->prepare('INSERT INTO scenarios(campaign_id,name,width,height) VALUES (?,?,?,?)')->execute([$campaign,"Prueba $suffix",10,10]);$scenarioId=(int)$db->lastInsertId();
+    $dm=['id'=>$dmId,'name'=>'DM prueba','email'=>'','role'=>'DM'];$player=['id'=>$playerId,'name'=>'Jugador prueba','email'=>'','role'=>'PLAYER'];
+
+    ok((int)$game->snapshot($scenarioId,$dm)['scenario']['width']===10,'el DM obtiene un snapshot');
+    try{$game->snapshot($scenarioId,$player);ok(false,'jugador no ve escenario inactivo');}catch(RuntimeException){ok(true,'jugador no ve escenario inactivo');}
+    $game->command($dm,'scenario.activate',['scenarioId'=>$scenarioId],req());
+    $placed=$game->command($player,'player.place',['scenarioId'=>$scenarioId,'characterId'=>$characterId,'x'=>0,'y'=>0],req());ok($placed['data']['x']===0,'jugador coloca su personaje');
+    $move=$game->command($player,'movement.submit',['scenarioId'=>$scenarioId,'path'=>[['x'=>1,'y'=>0]]],req());ok($move['data']['status']==='APPLIED','movimiento libre se aplica inmediatamente');
+    $game->command($dm,'map.cells.paint',['scenarioId'=>$scenarioId,'cells'=>[['x'=>2,'y'=>0]],'blocked'=>true],req());
+    $pending=$game->command($player,'movement.submit',['scenarioId'=>$scenarioId,'path'=>[['x'=>2,'y'=>0]]],req());ok($pending['data']['status']==='PENDING','movimiento bloqueado solicita aprobación');
+    $approved=$game->command($dm,'movement.approve',['scenarioId'=>$scenarioId,'movementId'=>$pending['data']['id']],req());ok($approved['data']['status']==='APPLIED','el DM aprueba movimiento');
+
+    $npc=$game->command($dm,'npc.create',['scenarioId'=>$scenarioId,'name'=>'Goblin','x'=>4,'y'=>4,'health'=>8,'visible'=>true],req());
+    $snap=$game->snapshot($scenarioId,$dm);$spId=(int)$snap['players'][0]['id'];
+    $game->command($dm,'encounter.prepare',['scenarioId'=>$scenarioId],req());
+    $game->command($dm,'initiative.set',['scenarioId'=>$scenarioId,'kind'=>'NPC','id'=>$npc['data']['id'],'initiative'=>15],req());
+    $game->command($dm,'initiative.set',['scenarioId'=>$scenarioId,'kind'=>'PLAYER','id'=>$spId,'initiative'=>10],req());
+    $started=$game->command($dm,'encounter.start',['scenarioId'=>$scenarioId],req());ok($started['data']['state']==='RUNNING','combate inicia con iniciativas');
+    $after=$game->command($dm,'turn.next',['scenarioId'=>$scenarioId],req());ok($after['data']['round']===1,'el DM avanza el turno');
+    $combat=$game->snapshot($scenarioId,$dm);$npcParticipant=array_values(array_filter($combat['participants'],fn($p)=>$p['actor_type']==='NPC'))[0];
+    $wait=$game->command($player,'turn.delay',['scenarioId'=>$scenarioId,'targetParticipantId'=>(int)$npcParticipant['id']],req());ok($wait['data']['round']===2,'jugador retrasa su turno hasta la ronda del objetivo');
+    $trigger=$game->command($dm,'turn.next',['scenarioId'=>$scenarioId],req());ok($trigger['data']['currentParticipantId']===(int)$after['data']['currentParticipantId'],'el objetivo activa el turno retrasado');
+
+    $selector=bin2hex(random_bytes(12));$validator=bin2hex(random_bytes(32));$db->prepare('INSERT INTO auth_tokens(user_id,selector,validator_hash) VALUES (?,?,?)')->execute([$playerId,$selector,hash('sha256',$validator)]);
+    $authenticated=(new Auth($db))->fromToken("$selector:$validator");ok((int)$authenticated['id']===$playerId,'token persistente autentica al usuario');
+    echo "\n$tests pruebas superadas.\n";
+} finally {
+    if($scenarioId)$db->prepare('DELETE FROM scenarios WHERE id=?')->execute([$scenarioId]);
+    foreach(array_reverse($userIds) as $id)$db->prepare('DELETE FROM users WHERE id=?')->execute([$id]);
+}

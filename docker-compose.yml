@@ -1,0 +1,62 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: dnd_manager
+      MARIADB_USER: dnd
+      MARIADB_PASSWORD: ${DB_PASSWORD:-dnd}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment: &app_environment
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Santo_Domingo}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      DB_DSN: mysql:host=mariadb;port=3306;dbname=dnd_manager;charset=utf8mb4
+      DB_USER: dnd
+      DB_PASSWORD: ${DB_PASSWORD:-dnd}
+      DM_INVITE_CODE: ${DM_INVITE_CODE:-cambia-este-codigo}
+      WS_HOST: 0.0.0.0
+      WS_PORT: 8081
+    command: ["php", "-S", "0.0.0.0:8080", "-t", "public", "public/index.php"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - uploads:/app/storage/uploads
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "$$s=fsockopen('127.0.0.1',8080); if(!$$s) exit(1); fclose($$s);"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  websocket:
+    build: .
+    restart: unless-stopped
+    environment: *app_environment
+    command: ["php", "bin/websocket.php", "start"]
+    ports:
+      - "8081:8081"
+    volumes:
+      - uploads:/app/storage/uploads
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+volumes:
+  mariadb_data:
+  uploads:

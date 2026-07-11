@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="theme-color" content="#17130f"><meta name="ws-url" content=""><title>D&D Manager</title><link rel="stylesheet" href="/assets/styles.css"></head>
+<body>
+<section id="auth" class="center-card">
+  <h1>⚔ D&D Manager</h1><p class="muted">Tu mesa, mapas y encuentros persistentes.</p>
+  <div class="tabs"><button data-auth-tab="login" class="active">Entrar</button><button data-auth-tab="register">Crear cuenta</button></div>
+  <form id="login-form"><label>Correo<input name="email" type="email" required autocomplete="email"></label><label>Contraseña<input name="password" type="password" required autocomplete="current-password"></label><button class="primary">Entrar</button></form>
+  <form id="register-form" hidden><label>Nombre<input name="name" required maxlength="80"></label><label>Correo<input name="email" type="email" required></label><label>Contraseña<input name="password" type="password" minlength="8" required></label><label>Rol<select name="role"><option value="PLAYER">Jugador</option><option value="DM">Dungeon Master</option></select></label><label id="invite-wrap" hidden>Código de DM<input name="inviteCode"></label><button class="primary">Crear y entrar</button></form>
+  <p id="auth-error" class="error"></p>
+</section>
+
+<div id="app" hidden>
+<header><button id="menu-btn" aria-label="Menú">☰</button><strong>D&D Manager</strong><span id="connection" class="pill offline">offline</span><span class="grow"></span><span id="user-label"></span><button id="logout">Salir</button></header>
+<div class="layout">
+<aside id="sidebar">
+  <section><h2>Escenarios</h2><div id="scenario-list"></div><button id="new-scenario" class="dm-only">＋ Nuevo escenario</button></section>
+  <section id="characters-panel"><h2>Personajes</h2><div id="character-list"></div><button id="new-character">＋ Nuevo personaje</button></section>
+</aside>
+<main>
+  <div id="empty" class="empty"><h2>Elige un escenario</h2><p>El mapa aparecerá aquí.</p></div>
+  <div id="workspace" hidden>
+    <nav id="toolbar">
+      <button data-mode="pan" class="active">✋ Mover mapa</button>
+      <button data-mode="path" class="player-only">➜ Camino</button><button id="apply-path" class="player-only">Aplicar</button><button id="place-character" class="player-only">Colocar</button><button id="delay-turn" class="player-only">Esperar turno</button>
+      <button data-mode="block" class="dm-only">▦ Bloquear</button><button data-mode="unblock" class="dm-only">□ Transitable</button>
+      <button data-mode="npc" class="dm-only">● NPC</button><button data-mode="object" class="dm-only">■ Objeto</button><button data-mode="select" class="dm-only">⌖ Seleccionar</button>
+      <span class="grow"></span><button id="zoom-out">−</button><span id="zoom-label">100%</span><button id="zoom-in">＋</button>
+    </nav>
+    <div id="map-wrap"><canvas id="map"></canvas><div id="cell-menu" class="floating" hidden></div></div>
+  </div>
+</main>
+<aside id="right-panel" hidden>
+  <section><h2 id="scenario-title"></h2><button id="toggle-active" class="dm-only"></button><button id="upload-background" class="dm-only">Imagen de fondo</button><button id="upload-avatar" class="player-only">Avatar del personaje</button><input id="image-file" type="file" accept="image/jpeg,image/png,image/webp" hidden><p id="scenario-status" class="muted"></p></section>
+  <section class="dm-only"><h2>Encounter</h2><div class="row"><button id="encounter-prepare">Preparar</button><button id="encounter-start">Iniciar combate</button><button id="turn-next">Siguiente turno</button><button id="order-ties">Ordenar empates</button><button id="encounter-stop">Terminar</button></div><p id="turn-info"></p></section>
+  <section><h2>Solicitudes</h2><div id="movement-requests"></div></section>
+  <section id="inspector"><h2>Selección</h2><p class="muted">Toca un token para inspeccionarlo.</p></section>
+</aside>
+</div></div>
+<div id="toast" role="status"></div>
+<script type="module" src="/assets/app.js"></script>
+</body></html>

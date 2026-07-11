@@ -1,0 +1,19 @@
+{
+  "name": "dnd/manager",
+  "description": "Gestor de mapas y encounters para una mesa de D&D",
+  "type": "project",
+  "require": {
+    "php": ">=8.0",
+    "ext-pdo": "*",
+    "ext-json": "*",
+    "ext-fileinfo": "*",
+    "vlucas/phpdotenv": "^5.6",
+    "workerman/workerman": "4.2.1"
+  },
+  "autoload": {"psr-4": {"Dnd\\": "src/"}},
+  "scripts": {
+    "serve": "php -S 127.0.0.1:8080 -t public public/index.php",
+    "websocket": "php bin/websocket.php",
+    "test": "php tests/run.php"
+  }
+}
