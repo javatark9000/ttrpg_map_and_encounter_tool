@@ -6,6 +6,7 @@ RUN composer install --no-dev --prefer-dist --no-interaction --no-progress --opt
 FROM php:8.3-cli-alpine
 RUN docker-php-ext-install pdo_mysql pcntl posix
 WORKDIR /app
+COPY docker/php-upload.ini /usr/local/etc/php/conf.d/uploads.ini
 COPY --from=vendor /app/vendor ./vendor
 COPY . .
 RUN mkdir -p storage/uploads && chown -R www-data:www-data storage vendor/workerman

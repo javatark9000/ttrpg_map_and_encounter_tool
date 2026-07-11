@@ -37,6 +37,14 @@
   <section id="inspector"><h2>Selección</h2><p class="muted">Toca un token para inspeccionarlo.</p></section>
 </aside>
 </div></div>
+<dialog id="form-dialog" aria-labelledby="dialog-title">
+  <form id="dialog-form" method="dialog">
+    <header class="dialog-header"><div><h2 id="dialog-title"></h2><p id="dialog-description" class="muted"></p></div><button type="button" id="dialog-close" class="icon-button" aria-label="Cerrar">×</button></header>
+    <div id="dialog-fields" class="dialog-fields"></div>
+    <p id="dialog-error" class="error" role="alert"></p>
+    <footer class="dialog-actions"><button type="button" id="dialog-cancel">Cancelar</button><button type="submit" id="dialog-submit" class="primary">Guardar</button></footer>
+  </form>
+</dialog>
 <div id="toast" role="status"></div>
 <script type="module" src="/assets/app.js"></script>
 </body></html>
