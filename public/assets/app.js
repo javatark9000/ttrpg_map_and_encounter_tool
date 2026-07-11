@@ -81,6 +81,7 @@ function tap(x,y,options={}){
   state.path.push(c);draw();return
  }
  if(state.mode==='place'){if(!state.selectedCharacter){toast('Selecciona un personaje');return}command('player.place',{characterId:state.selectedCharacter,...c});setMode('pan');return}
+ if(state.user.role==='PLAYER')return
  if(state.mode==='npc'){void createNpcAt(c);return}
  if(state.mode==='object')return
  const tokens=tokensAtCell(c);if(tokens.length===1)selectMapEntity(tokens[0],!!options.additive);else if(tokens.length>1)showCellMenu(tokens,x,y,!!options.additive);else if(state.user.role==='DM'&&state.mode==='select'){if(selectionCount()){clearEntitySelection();return}void editCellNote(c)}

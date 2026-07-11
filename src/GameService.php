@@ -43,7 +43,11 @@ final class GameService
         }
         $pending=$user['role']==='DM'?$this->all("SELECT mr.*,u.name user_name FROM movement_requests mr JOIN users u ON u.id=mr.user_id WHERE mr.scenario_id=? AND mr.status='PENDING'",[$scenarioId]):[];
         $notes=$user['role']==='DM'?$this->all('SELECT * FROM cell_notes WHERE scenario_id=?',[$scenarioId]):[];
-        if($user['role']!=='DM') { foreach($objects as &$o) unset($o['notes']); foreach($npcs as &$n) unset($n['notes']); foreach($players as &$pl) unset($pl['dm_notes']); }
+        if($user['role']!=='DM') {
+            $objects=array_map(fn($o)=>['id'=>$o['id'],'x'=>$o['x'],'y'=>$o['y'],'width_cells'=>$o['width_cells'],'height_cells'=>$o['height_cells'],'image_asset_id'=>$o['image_asset_id']],$objects);
+            $npcs=array_map(fn($n)=>['id'=>$n['id'],'x'=>$n['x'],'y'=>$n['y'],'image_asset_id'=>$n['image_asset_id']],$npcs);
+            foreach($players as &$pl) unset($pl['dm_notes']);
+        }
         return ['scenario'=>$s,'blocked'=>$blocked,'objects'=>$objects,'npcs'=>$npcs,'players'=>$players,'encounter'=>$encounter,'participants'=>$participants,'pendingMovements'=>$pending,'cellNotes'=>$notes];
     }
 
