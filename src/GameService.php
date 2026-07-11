@@ -33,7 +33,7 @@ final class GameService
         $npcSql='SELECT n.*,a.path image_path FROM npc_characters n LEFT JOIN assets a ON a.id=n.image_asset_id WHERE n.scenario_id=?';
         if($user['role']!=='DM') $npcSql.=' AND n.visible=1 AND NOT(n.health<=0 OR n.dead_hidden=1)';
         $npcs=$this->all($npcSql,[$scenarioId]);
-        $players=$this->all('SELECT sp.*,u.name user_name,pc.name, a.path image_path,dpn.notes dm_notes FROM scenario_players sp JOIN users u ON u.id=sp.user_id JOIN player_characters pc ON pc.id=sp.character_id LEFT JOIN assets a ON a.id=pc.avatar_asset_id LEFT JOIN dm_player_notes dpn ON dpn.player_id=sp.user_id AND dpn.campaign_id=pc.campaign_id WHERE sp.scenario_id=?'.($user['role']==='DM'?'':' AND sp.placed=1'),[$scenarioId]);
+        $players=$this->all('SELECT sp.*,u.name user_name,pc.name,pc.avatar_asset_id image_asset_id,a.path image_path,dpn.notes dm_notes FROM scenario_players sp JOIN users u ON u.id=sp.user_id JOIN player_characters pc ON pc.id=sp.character_id LEFT JOIN assets a ON a.id=pc.avatar_asset_id LEFT JOIN dm_player_notes dpn ON dpn.player_id=sp.user_id AND dpn.campaign_id=pc.campaign_id WHERE sp.scenario_id=?'.($user['role']==='DM'?'':' AND sp.placed=1'),[$scenarioId]);
         $encounter=$this->one('SELECT * FROM encounters WHERE scenario_id=?',[$scenarioId]);
         $participants=[];
         if($encounter) $participants=$this->all('SELECT * FROM encounter_participants WHERE encounter_id=? ORDER BY initiative DESC,tie_order,id',[$encounter['id']]);

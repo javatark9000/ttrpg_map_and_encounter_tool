@@ -17,6 +17,7 @@ try {
     $addUser->execute(['Jugador prueba',"player-$suffix@example.test",password_hash('password123',PASSWORD_DEFAULT),'PLAYER']);$playerId=(int)$db->lastInsertId();$userIds[]=$playerId;
     $member=$db->prepare('INSERT INTO campaign_members(campaign_id,user_id) VALUES (?,?)');$member->execute([$campaign,$dmId]);$member->execute([$campaign,$playerId]);
     $db->prepare('INSERT INTO player_characters(owner_id,campaign_id,name,max_health) VALUES (?,?,?,?)')->execute([$playerId,$campaign,'Héroe',20]);$characterId=(int)$db->lastInsertId();
+    $db->prepare('INSERT INTO assets(owner_id,mime,size_bytes,width,height,path) VALUES (?,?,?,?,?,?)')->execute([$playerId,'image/png',100,32,32,"test-$suffix.png"]);$avatarId=(int)$db->lastInsertId();$db->prepare('UPDATE player_characters SET avatar_asset_id=? WHERE id=?')->execute([$avatarId,$characterId]);
     $db->prepare('INSERT INTO scenarios(campaign_id,name,width,height) VALUES (?,?,?,?)')->execute([$campaign,"Prueba $suffix",10,10]);$scenarioId=(int)$db->lastInsertId();
     $dm=['id'=>$dmId,'name'=>'DM prueba','email'=>'','role'=>'DM'];$player=['id'=>$playerId,'name'=>'Jugador prueba','email'=>'','role'=>'PLAYER'];
 
@@ -26,6 +27,7 @@ try {
     $game->command($dm,'scenario.activate',['scenarioId'=>$scenarioId],req());
     ok((bool)array_filter($game->bootstrap($player)['scenarios'],fn($s)=>(int)$s['id']===$scenarioId),'jugador lista escenarios activos');
     $placed=$game->command($player,'player.place',['scenarioId'=>$scenarioId,'characterId'=>$characterId,'x'=>0,'y'=>0],req());ok($placed['data']['x']===0,'jugador coloca su personaje');
+    ok((int)$game->snapshot($scenarioId,$dm)['players'][0]['image_asset_id']===$avatarId,'snapshot incluye el avatar del jugador');
     $move=$game->command($player,'movement.submit',['scenarioId'=>$scenarioId,'path'=>[['x'=>1,'y'=>0]]],req());ok($move['data']['status']==='APPLIED','movimiento libre se aplica inmediatamente');
     $game->command($dm,'map.cells.paint',['scenarioId'=>$scenarioId,'cells'=>[['x'=>2,'y'=>0]],'blocked'=>true],req());
     $pending=$game->command($player,'movement.submit',['scenarioId'=>$scenarioId,'path'=>[['x'=>2,'y'=>0]]],req());ok($pending['data']['status']==='PENDING','movimiento bloqueado solicita aprobación');
