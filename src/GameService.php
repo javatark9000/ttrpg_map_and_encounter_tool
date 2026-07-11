@@ -57,7 +57,7 @@ final class GameService
             $s=$this->one('SELECT * FROM scenarios WHERE id=? FOR UPDATE',[$scenarioId]);
             if(!$s) throw new RuntimeException('Escenario inexistente.');
             $this->assertMember((int)$s['campaign_id'],(int)$user['id']);
-            $dmOnly=['scenario.activate','scenario.deactivate','map.cells.paint','object.create','npc.create','token.update','token.move_dm','movement.approve','movement.reject','encounter.prepare','encounter.start','encounter.stop','initiative.set','initiative.reorder_tie','turn.next','turn.delay_order','health.set','cell.note','player.note'];
+            $dmOnly=['scenario.activate','scenario.deactivate','map.cells.paint','object.create','objects.bulk_update','npc.create','token.update','token.move_dm','movement.approve','movement.reject','encounter.prepare','encounter.start','encounter.stop','initiative.set','initiative.reorder_tie','turn.next','turn.delay_order','health.set','cell.note','player.note'];
             if(in_array($type,$dmOnly,true) && $user['role']!=='DM') throw new RuntimeException('Acción exclusiva del DM.');
             $data=match($type){
                 'scenario.activate'=>$this->activate($scenarioId,true),
@@ -66,6 +66,7 @@ final class GameService
                 'cell.note'=>$this->cellNote($s,$p),
                 'player.note'=>$this->playerNote($s,$p),
                 'object.create'=>$this->createObject($s,$p),
+                'objects.bulk_update'=>$this->bulkUpdateObjects($s,$p),
                 'npc.create'=>$this->createNpc($s,$p),
                 'token.update'=>$this->updateToken($s,$p),
                 'token.move_dm'=>$this->moveDm($s,$p),
@@ -110,6 +111,7 @@ final class GameService
     private function cellNote(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $notes=trim((string)($p['notes']??'')); if($notes==='')$this->db->prepare('DELETE FROM cell_notes WHERE scenario_id=? AND x=? AND y=?')->execute([$s['id'],$x,$y]); else $this->db->prepare('INSERT INTO cell_notes(scenario_id,x,y,notes) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE notes=VALUES(notes)')->execute([$s['id'],$x,$y,$notes]); return compact('x','y','notes'); }
 
     private function createObject(array $s,array $p): array { [$x,$y]=$this->coords($s,$p);$width=(int)($p['widthCells']??1);$height=(int)($p['heightCells']??1);$this->validateObjectSize($s,$x,$y,$width,$height);$this->db->prepare('INSERT INTO map_objects(scenario_id,name,x,y,width_cells,height_cells,notes,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'Objeto'))?:'Objeto',$x,$y,$width,$height,$p['notes']??null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]);return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'OBJECT','x'=>$x,'y'=>$y,'widthCells'=>$width,'heightCells'=>$height]; }
+    private function bulkUpdateObjects(array $s,array $p): array { $ids=array_values(array_unique(array_filter(array_map('intval',(array)($p['objectIds']??[])),fn($id)=>$id>0)));if(!$ids||count($ids)>200)throw new RuntimeException('Selecciona entre 1 y 200 objetos.');$sets=[];$values=[];if(array_key_exists('visible',$p)){$sets[]='visible=?';$values[]=!empty($p['visible'])?1:0;}if(array_key_exists('image_asset_id',$p)){$sets[]='image_asset_id=?';$values[]=(int)$p['image_asset_id'];}if(!$sets)throw new RuntimeException('No hay cambios para aplicar.');$placeholders=implode(',',array_fill(0,count($ids),'?'));$values[]=$s['id'];array_push($values,...$ids);$this->db->prepare('UPDATE map_objects SET '.implode(',',$sets)." WHERE scenario_id=? AND id IN ($placeholders)")->execute($values);return ['objectIds'=>$ids,'updated'=>$this->db->query('SELECT ROW_COUNT()')->fetchColumn()]; }
     private function createNpc(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $this->db->prepare('INSERT INTO npc_characters(scenario_id,name,x,y,notes,health,initiative,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'NPC'))?:'NPC',$x,$y,$p['notes']??null,(int)($p['health']??1),isset($p['initiative'])?(int)$p['initiative']:null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]); return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'NPC','x'=>$x,'y'=>$y]; }
 
     private function updateToken(array $s,array $p): array
