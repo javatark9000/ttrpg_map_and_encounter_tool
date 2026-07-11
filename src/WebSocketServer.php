@@ -41,7 +41,7 @@ final class WebSocketServer
             if(!isset($this->meta[$from->id]))throw new RuntimeException('Conexión inválida.');
             $m=json_decode($msg,true,512,JSON_THROW_ON_ERROR);$kind=$m['action']??'';$user=$this->meta[$from->id]['user'];
             if($kind==='subscribe'){$sid=(int)($m['scenarioId']??0);$snapshot=$this->game->snapshot($sid,$user);$this->meta[$from->id]['scenario']=$sid;$this->send($from,['type'=>'snapshot','data'=>$snapshot]);return;}
-            if($kind==='command'){$result=$this->game->command($user,(string)($m['type']??''),(array)($m['payload']??[]),(string)($m['requestId']??''));$this->send($from,['type'=>'command.accepted','requestId'=>$m['requestId'],'event'=>$result]);$this->broadcastRefresh($worker,(int)$result['scenarioId']);return;}
+            if($kind==='command'){$result=$this->game->command($user,(string)($m['type']??''),(array)($m['payload']??[]),(string)($m['requestId']??''));$this->send($from,['type'=>'command.accepted','requestId'=>$m['requestId'],'event'=>$result]);if(in_array($result['type'],['scenario.activate','scenario.deactivate'],true))$this->broadcastScenarioListChanged($worker,(int)$result['scenarioId']);$this->broadcastRefresh($worker,(int)$result['scenarioId']);return;}
             if($kind==='heartbeat'){if($user['role']==='DM')$this->renewDm((int)$user['id'],$this->meta[$from->id]['connectionId']);$this->send($from,['type'=>'heartbeat']);return;}
             throw new RuntimeException('Mensaje desconocido.');
         }catch(\Throwable $e){$this->send($from,['type'=>'command.error','requestId'=>$m['requestId']??null,'error'=>$e->getMessage()]);}
@@ -52,6 +52,7 @@ final class WebSocketServer
         $m=$this->meta[$conn->id]??null;if($m&&$m['user']['role']==='DM')Database::connection()->prepare('DELETE FROM dm_lease WHERE user_id=? AND connection_id=?')->execute([$m['user']['id'],$m['connectionId']]);unset($this->meta[$conn->id]);
     }
     private function broadcastRefresh(Worker $worker,int $sid): void {foreach($worker->connections as $c)if(($this->meta[$c->id]['scenario']??null)===$sid)$this->send($c,['type'=>'refresh','scenarioId'=>$sid]);}
+    private function broadcastScenarioListChanged(Worker $worker,int $sid): void {foreach($worker->connections as $c)$this->send($c,['type'=>'scenarios.changed','scenarioId'=>$sid]);}
     private function send(TcpConnection $c,array $data): void {$c->send(json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));}
     private function acquireDm(int $uid,string $cid): bool {$db=Database::connection();$db->prepare('DELETE FROM dm_lease WHERE expires_at<NOW()')->execute();try{$db->prepare('INSERT INTO dm_lease(lease_key,user_id,connection_id,expires_at) VALUES (1,?,?,DATE_ADD(NOW(),INTERVAL 45 SECOND))')->execute([$uid,$cid]);return true;}catch(\PDOException){return false;}}
     private function renewDm(int $uid,string $cid): void {Database::connection()->prepare('UPDATE dm_lease SET expires_at=DATE_ADD(NOW(),INTERVAL 45 SECOND) WHERE user_id=? AND connection_id=?')->execute([$uid,$cid]);}

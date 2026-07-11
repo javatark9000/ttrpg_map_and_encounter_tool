@@ -21,8 +21,10 @@ try {
     $dm=['id'=>$dmId,'name'=>'DM prueba','email'=>'','role'=>'DM'];$player=['id'=>$playerId,'name'=>'Jugador prueba','email'=>'','role'=>'PLAYER'];
 
     ok((int)$game->snapshot($scenarioId,$dm)['scenario']['width']===10,'el DM obtiene un snapshot');
+    ok(!array_filter($game->bootstrap($player)['scenarios'],fn($s)=>(int)$s['id']===$scenarioId),'jugador no lista escenarios inactivos');
     try{$game->snapshot($scenarioId,$player);ok(false,'jugador no ve escenario inactivo');}catch(RuntimeException){ok(true,'jugador no ve escenario inactivo');}
     $game->command($dm,'scenario.activate',['scenarioId'=>$scenarioId],req());
+    ok((bool)array_filter($game->bootstrap($player)['scenarios'],fn($s)=>(int)$s['id']===$scenarioId),'jugador lista escenarios activos');
     $placed=$game->command($player,'player.place',['scenarioId'=>$scenarioId,'characterId'=>$characterId,'x'=>0,'y'=>0],req());ok($placed['data']['x']===0,'jugador coloca su personaje');
     $move=$game->command($player,'movement.submit',['scenarioId'=>$scenarioId,'path'=>[['x'=>1,'y'=>0]]],req());ok($move['data']['status']==='APPLIED','movimiento libre se aplica inmediatamente');
     $game->command($dm,'map.cells.paint',['scenarioId'=>$scenarioId,'cells'=>[['x'=>2,'y'=>0]],'blocked'=>true],req());

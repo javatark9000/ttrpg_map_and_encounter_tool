@@ -14,7 +14,10 @@ final class GameService
     {
         $campaigns=$this->all('SELECT c.* FROM campaigns c JOIN campaign_members m ON m.campaign_id=c.id WHERE m.user_id=? ORDER BY c.id',[$user['id']]);
         $characters=$user['role']==='PLAYER' ? $this->all('SELECT p.*,a.path avatar_path FROM player_characters p LEFT JOIN assets a ON a.id=p.avatar_asset_id WHERE p.owner_id=?',[$user['id']]) : [];
-        $scenarios=$this->all('SELECT s.*,a.path background_path FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.campaign_id IN (SELECT campaign_id FROM campaign_members WHERE user_id=?) ORDER BY s.active DESC,s.name',[$user['id']]);
+        $scenarioSql='SELECT s.*,a.path background_path FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.campaign_id IN (SELECT campaign_id FROM campaign_members WHERE user_id=?)';
+        if($user['role']!=='DM') $scenarioSql.=' AND s.active=1';
+        $scenarioSql.=' ORDER BY s.active DESC,s.name';
+        $scenarios=$this->all($scenarioSql,[$user['id']]);
         foreach($scenarios as &$s){ $s['id']=(int)$s['id']; $s['width']=(int)$s['width']; $s['height']=(int)$s['height']; $s['active']=(bool)$s['active']; }
         return compact('campaigns','characters','scenarios');
     }
