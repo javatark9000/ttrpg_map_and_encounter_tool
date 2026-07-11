@@ -109,14 +109,14 @@ final class GameService
 
     private function cellNote(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $notes=trim((string)($p['notes']??'')); if($notes==='')$this->db->prepare('DELETE FROM cell_notes WHERE scenario_id=? AND x=? AND y=?')->execute([$s['id'],$x,$y]); else $this->db->prepare('INSERT INTO cell_notes(scenario_id,x,y,notes) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE notes=VALUES(notes)')->execute([$s['id'],$x,$y,$notes]); return compact('x','y','notes'); }
 
-    private function createObject(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $this->db->prepare('INSERT INTO map_objects(scenario_id,name,x,y,notes,visible,image_asset_id) VALUES (?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'Objeto'))?:'Objeto',$x,$y,$p['notes']??null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]); return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'OBJECT','x'=>$x,'y'=>$y]; }
+    private function createObject(array $s,array $p): array { [$x,$y]=$this->coords($s,$p);$width=(int)($p['widthCells']??1);$height=(int)($p['heightCells']??1);$this->validateObjectSize($s,$x,$y,$width,$height);$this->db->prepare('INSERT INTO map_objects(scenario_id,name,x,y,width_cells,height_cells,notes,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'Objeto'))?:'Objeto',$x,$y,$width,$height,$p['notes']??null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]);return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'OBJECT','x'=>$x,'y'=>$y,'widthCells'=>$width,'heightCells'=>$height]; }
     private function createNpc(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $this->db->prepare('INSERT INTO npc_characters(scenario_id,name,x,y,notes,health,initiative,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'NPC'))?:'NPC',$x,$y,$p['notes']??null,(int)($p['health']??1),isset($p['initiative'])?(int)$p['initiative']:null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]); return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'NPC','x'=>$x,'y'=>$y]; }
 
     private function updateToken(array $s,array $p): array
     {
         $kind=strtoupper((string)($p['kind']??'')); $id=(int)($p['id']??0);
         if($kind==='NPC') { $fields=['name','notes','health','initiative','visible','dead_hidden','image_asset_id']; $table='npc_characters'; }
-        elseif($kind==='OBJECT') { $fields=['name','notes','visible','image_asset_id']; $table='map_objects'; }
+        elseif($kind==='OBJECT') { $fields=['name','notes','visible','image_asset_id','width_cells','height_cells']; $table='map_objects';if(array_key_exists('width_cells',$p)||array_key_exists('height_cells',$p)){$current=$this->one('SELECT * FROM map_objects WHERE id=? AND scenario_id=?',[$id,$s['id']]);if(!$current)throw new RuntimeException('Objeto inexistente.');$this->validateObjectSize($s,(int)$current['x'],(int)$current['y'],(int)($p['width_cells']??$current['width_cells']),(int)($p['height_cells']??$current['height_cells']));} }
         else throw new RuntimeException('Tipo de token inválido.');
         $sets=[];$vals=[]; foreach($fields as $f)if(array_key_exists($f,$p)){$sets[]="$f=?";$vals[]=$p[$f];}
         if(!$sets)throw new RuntimeException('No hay cambios.'); $vals[]=$id;$vals[]=$s['id'];
@@ -124,7 +124,7 @@ final class GameService
         return ['kind'=>$kind,'id'=>$id];
     }
 
-    private function moveDm(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $kind=strtoupper((string)$p['kind']);$id=(int)$p['id']; $table=match($kind){'NPC'=>'npc_characters','OBJECT'=>'map_objects','PLAYER'=>'scenario_players',default=>throw new RuntimeException('Token inválido.')}; $this->db->prepare("UPDATE $table SET x=?,y=? WHERE id=? AND scenario_id=?")->execute([$x,$y,$id,$s['id']]); return compact('kind','id','x','y'); }
+    private function moveDm(array $s,array $p): array { [$x,$y]=$this->coords($s,$p);$kind=strtoupper((string)$p['kind']);$id=(int)$p['id'];$table=match($kind){'NPC'=>'npc_characters','OBJECT'=>'map_objects','PLAYER'=>'scenario_players',default=>throw new RuntimeException('Token inválido.')};if($kind==='OBJECT'){$object=$this->one('SELECT width_cells,height_cells FROM map_objects WHERE id=? AND scenario_id=?',[$id,$s['id']]);if(!$object)throw new RuntimeException('Objeto inexistente.');$this->validateObjectSize($s,$x,$y,(int)$object['width_cells'],(int)$object['height_cells']);}$this->db->prepare("UPDATE $table SET x=?,y=? WHERE id=? AND scenario_id=?")->execute([$x,$y,$id,$s['id']]);return compact('kind','id','x','y'); }
 
     private function placePlayer(array $s,array $u,array $p): array
     {
@@ -220,6 +220,7 @@ final class GameService
         $this->db->prepare("INSERT INTO encounter_participants(encounter_id,actor_type,actor_id,initiative,state) SELECT ?,'NPC',id,initiative,IF(health<=0,'DEAD','ACTIVE') FROM npc_characters WHERE scenario_id=? AND initiative IS NOT NULL ON DUPLICATE KEY UPDATE initiative=VALUES(initiative),state=VALUES(state)")->execute([$eid,$sid]);
     }
 
+    private function validateObjectSize(array $s,int $x,int $y,int $width,int $height): void { if($width<1||$height<1||$width>60||$height>60||$x+$width>(int)$s['width']||$y+$height>(int)$s['height'])throw new RuntimeException('El área del objeto queda fuera del mapa.'); }
     private function coords(array $s,array $c): array { $x=filter_var($c['x']??null,FILTER_VALIDATE_INT);$y=filter_var($c['y']??null,FILTER_VALIDATE_INT);if($x===false||$y===false||$x<0||$y<0||$x>=(int)$s['width']||$y>=(int)$s['height'])throw new RuntimeException('Coordenadas fuera del mapa.');return [(int)$x,(int)$y]; }
     private function assertMember(int $cid,int $uid): void { if(!$this->one('SELECT 1 FROM campaign_members WHERE campaign_id=? AND user_id=?',[$cid,$uid]))throw new RuntimeException('Sin acceso a la campaña.'); }
     private function one(string $sql,array $args=[]): array|false { $q=$this->db->prepare($sql);$q->execute($args);return $q->fetch(); }

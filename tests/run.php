@@ -32,6 +32,7 @@ try {
     $game->command($dm,'map.cells.paint',['scenarioId'=>$scenarioId,'cells'=>[['x'=>2,'y'=>0]],'blocked'=>true],req());
     $pending=$game->command($player,'movement.submit',['scenarioId'=>$scenarioId,'path'=>[['x'=>2,'y'=>0]]],req());ok($pending['data']['status']==='PENDING','movimiento bloqueado solicita aprobación');
     $approved=$game->command($dm,'movement.approve',['scenarioId'=>$scenarioId,'movementId'=>$pending['data']['id']],req());ok($approved['data']['status']==='APPLIED','el DM aprueba movimiento');
+    $object=$game->command($dm,'object.create',['scenarioId'=>$scenarioId,'name'=>'Mesa grande','x'=>3,'y'=>2,'widthCells'=>5,'heightCells'=>2,'visible'=>true],req());$objectRow=array_values(array_filter($game->snapshot($scenarioId,$dm)['objects'],fn($o)=>(int)$o['id']===(int)$object['data']['id']))[0];ok((int)$objectRow['width_cells']===5&&(int)$objectRow['height_cells']===2,'objeto conserva su área rectangular en casillas');
 
     $npc=$game->command($dm,'npc.create',['scenarioId'=>$scenarioId,'name'=>'Goblin','x'=>4,'y'=>4,'health'=>8,'visible'=>true],req());
     $snap=$game->snapshot($scenarioId,$dm);$spId=(int)$snap['players'][0]['id'];
