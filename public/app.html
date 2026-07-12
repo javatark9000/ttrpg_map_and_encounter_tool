@@ -6,6 +6,7 @@
   <h1>⚔ D&D Manager</h1><p class="muted">Tu mesa, mapas y encuentros persistentes.</p>
   <div class="tabs"><button data-auth-tab="login" class="active">Entrar</button><button data-auth-tab="register">Crear cuenta</button></div>
   <form id="login-form"><label>Correo<input name="email" type="email" required autocomplete="email"></label><label>Contraseña<input name="password" type="password" required autocomplete="current-password"></label><button class="primary">Entrar</button></form>
+  <div id="guest-access"><div class="auth-separator"><span>o</span></div><button type="button" id="guest-login">Entrar como invitado</button><p class="muted">No requiere crear una cuenta. La vista seguirá automáticamente al DM.</p></div>
   <form id="register-form" hidden><label>Nombre<input name="name" required maxlength="80"></label><label>Correo<input name="email" type="email" required></label><label>Contraseña<input name="password" type="password" minlength="8" required></label><label>Rol<select name="role"><option value="PLAYER">Jugador</option><option value="DM">Dungeon Master</option></select></label><label id="invite-wrap" hidden>Código de DM<input name="inviteCode"></label><button class="primary">Crear y entrar</button></form>
   <p id="auth-error" class="error"></p>
 </section>

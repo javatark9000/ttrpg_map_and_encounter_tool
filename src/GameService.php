@@ -51,8 +51,27 @@ final class GameService
         return ['scenario'=>$s,'blocked'=>$blocked,'objects'=>$objects,'npcs'=>$npcs,'players'=>$players,'encounter'=>$encounter,'participants'=>$participants,'pendingMovements'=>$pending,'cellNotes'=>$notes];
     }
 
+    public function recordDmView(array $user,int $scenarioId,array $camera): array
+    {
+        if($user['role']!=='DM') throw new RuntimeException('Acción exclusiva del DM.');
+        $scenario=$this->one('SELECT id,campaign_id,active FROM scenarios WHERE id=?',[$scenarioId]);
+        if(!$scenario||(int)$scenario['active']!==1) throw new RuntimeException('El escenario no está activo.');
+        $this->assertMember((int)$scenario['campaign_id'],(int)$user['id']);
+        $centerX=(float)($camera['centerX']??0);$centerY=(float)($camera['centerY']??0);$zoom=max(.25,min(3,(float)($camera['zoom']??1)));
+        $this->db->prepare('INSERT INTO dm_scenario_views(campaign_id,scenario_id,center_x,center_y,zoom) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE center_x=VALUES(center_x),center_y=VALUES(center_y),zoom=VALUES(zoom),viewed_at=CURRENT_TIMESTAMP')->execute([$scenario['campaign_id'],$scenarioId,$centerX,$centerY,$zoom]);
+        return ['scenarioId'=>$scenarioId,'campaignId'=>(int)$scenario['campaign_id'],'camera'=>['centerX'=>$centerX,'centerY'=>$centerY,'zoom'=>$zoom]];
+    }
+
+    public function guestView(array $user): ?array
+    {
+        if($user['role']!=='GUEST') return null;
+        $view=$this->one('SELECT v.campaign_id,v.scenario_id,v.center_x,v.center_y,v.zoom FROM dm_scenario_views v JOIN scenarios s ON s.id=v.scenario_id JOIN campaign_members m ON m.campaign_id=v.campaign_id WHERE m.user_id=? AND s.active=1 ORDER BY v.viewed_at DESC,v.scenario_id DESC LIMIT 1',[$user['id']]);
+        return $view?['scenarioId'=>(int)$view['scenario_id'],'campaignId'=>(int)$view['campaign_id'],'camera'=>['centerX'=>(float)$view['center_x'],'centerY'=>(float)$view['center_y'],'zoom'=>(float)$view['zoom']]]:null;
+    }
+
     public function command(array $user, string $type, array $p, string $requestId): array
     {
+        if($user['role']==='GUEST') throw new RuntimeException('El invitado es de solo lectura.');
         if(!preg_match('/^[A-Za-z0-9_-]{8,64}$/',$requestId)) throw new RuntimeException('requestId inválido.');
         $old=$this->one('SELECT response FROM command_receipts WHERE request_id=? AND user_id=?',[$requestId,$user['id']]);
         if($old) return json_decode($old['response'],true);
@@ -126,7 +145,7 @@ final class GameService
         if($kind==='NPC') { $fields=['name','notes','health','initiative','visible','dead_hidden','image_asset_id']; $table='npc_characters'; }
         elseif($kind==='OBJECT') { $fields=['name','notes','visible','image_asset_id','width_cells','height_cells']; $table='map_objects';if(array_key_exists('width_cells',$p)||array_key_exists('height_cells',$p)){$current=$this->one('SELECT * FROM map_objects WHERE id=? AND scenario_id=?',[$id,$s['id']]);if(!$current)throw new RuntimeException('Objeto inexistente.');$this->validateObjectSize($s,(int)$current['x'],(int)$current['y'],(int)($p['width_cells']??$current['width_cells']),(int)($p['height_cells']??$current['height_cells']));} }
         else throw new RuntimeException('Tipo de token inválido.');
-        $sets=[];$vals=[]; foreach($fields as $f)if(array_key_exists($f,$p)){$sets[]="$f=?";$vals[]=$p[$f];}
+        $sets=[];$vals=[]; foreach($fields as $f)if(array_key_exists($f,$p)){$value=$p[$f];if(in_array($f,['visible','dead_hidden'],true))$value=!empty($value)?1:0;elseif(in_array($f,['health','width_cells','height_cells'],true))$value=(int)$value;elseif($f==='initiative')$value=$value===null||$value===''?null:(int)$value;elseif($f==='image_asset_id')$value=$value===null||$value===''?null:(int)$value;else $value=(string)$value;$sets[]="$f=?";$vals[]=$value;}
         if(!$sets)throw new RuntimeException('No hay cambios.'); $vals[]=$id;$vals[]=$s['id'];
         $this->db->prepare("UPDATE $table SET ".implode(',',$sets).' WHERE id=? AND scenario_id=?')->execute($vals);
         return ['kind'=>$kind,'id'=>$id];

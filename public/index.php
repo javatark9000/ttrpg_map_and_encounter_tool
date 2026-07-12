@@ -32,6 +32,7 @@ try {
 
     if($path==='/api/auth/register'&&$method==='POST') jsonOut(['user'=>$auth->register($body)]);
     if($path==='/api/auth/login'&&$method==='POST') jsonOut(['user'=>$auth->login((string)($body['email']??''),(string)($body['password']??''))]);
+    if($path==='/api/auth/guest'&&$method==='POST') jsonOut(['user'=>$auth->guest()]);
     if($path==='/api/auth/logout'&&$method==='POST'){ $auth->logout($_COOKIE[Auth::COOKIE]??null); jsonOut(['ok'=>true]); }
     if($path==='/api/me'&&$method==='GET'){ ensureCsrf(); jsonOut(['user'=>$auth->current()]); }
 
@@ -102,7 +103,7 @@ function serveAsset(PDO $db,int $id,array $user): never {
     $q=$db->prepare('SELECT * FROM assets WHERE id=?');$q->execute([$id]);$a=$q->fetch();if(!$a)throw new HttpError('Imagen inexistente.',404);
     $allowed=(int)$a['owner_id']===(int)$user['id'];
     if(!$allowed&&$user['role']==='DM'){$q=$db->prepare('SELECT 1 FROM campaign_members cm WHERE cm.user_id=? AND (EXISTS(SELECT 1 FROM player_characters pc WHERE pc.avatar_asset_id=? AND pc.campaign_id=cm.campaign_id) OR EXISTS(SELECT 1 FROM scenarios s WHERE s.background_asset_id=? AND s.campaign_id=cm.campaign_id) OR EXISTS(SELECT 1 FROM map_objects o JOIN scenarios s ON s.id=o.scenario_id WHERE o.image_asset_id=? AND s.campaign_id=cm.campaign_id) OR EXISTS(SELECT 1 FROM npc_characters n JOIN scenarios s ON s.id=n.scenario_id WHERE n.image_asset_id=? AND s.campaign_id=cm.campaign_id)) LIMIT 1');$q->execute([$user['id'],$id,$id,$id,$id]);$allowed=(bool)$q->fetchColumn();}
-    if(!$allowed&&$user['role']==='PLAYER'){
+    if(!$allowed&&in_array($user['role'],['PLAYER','GUEST'],true)){
         $q=$db->prepare('SELECT 1 WHERE
             EXISTS(SELECT 1 FROM player_characters WHERE avatar_asset_id=? AND owner_id=?)
             OR EXISTS(SELECT 1 FROM scenario_players sp JOIN player_characters pc ON pc.id=sp.character_id JOIN scenarios s ON s.id=sp.scenario_id JOIN campaign_members cm ON cm.campaign_id=s.campaign_id WHERE pc.avatar_asset_id=? AND sp.placed=1 AND s.active=1 AND cm.user_id=?)

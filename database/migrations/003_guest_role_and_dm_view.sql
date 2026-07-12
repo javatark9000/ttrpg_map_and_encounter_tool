@@ -1,0 +1,16 @@
+USE dnd_manager;
+
+ALTER TABLE users MODIFY role ENUM('DM','PLAYER','GUEST') NOT NULL;
+
+CREATE TABLE IF NOT EXISTS dm_scenario_views (
+ campaign_id BIGINT UNSIGNED NOT NULL,
+ scenario_id BIGINT UNSIGNED NOT NULL,
+ center_x DECIMAL(10,4) NOT NULL DEFAULT 0,
+ center_y DECIMAL(10,4) NOT NULL DEFAULT 0,
+ zoom DECIMAL(6,4) NOT NULL DEFAULT 1,
+ viewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ PRIMARY KEY(campaign_id,scenario_id),
+ FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+ FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE,
+ INDEX(campaign_id,viewed_at)
+) ENGINE=InnoDB;

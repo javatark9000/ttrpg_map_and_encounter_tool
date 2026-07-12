@@ -32,6 +32,23 @@ final class Auth
         return $this->issue($id);
     }
 
+    public function guest(): array
+    {
+        $email='guest@dnd-manager.internal';
+        $stmt=$this->db->prepare('SELECT id FROM users WHERE email=? AND role=\'GUEST\' LIMIT 1');
+        $stmt->execute([$email]);
+        $userId=(int)$stmt->fetchColumn();
+        if(!$userId){
+            try{
+                $this->db->prepare("INSERT INTO users(name,email,password_hash,role) VALUES ('Invitado',?,?, 'GUEST')")->execute([$email,password_hash(bin2hex(random_bytes(32)),PASSWORD_DEFAULT)]);
+                $userId=(int)$this->db->lastInsertId();
+            }catch(\PDOException){$stmt->execute([$email]);$userId=(int)$stmt->fetchColumn();}
+        }
+        if(!$userId) throw new RuntimeException('No se pudo iniciar el modo invitado.');
+        $this->db->prepare('INSERT IGNORE INTO campaign_members(campaign_id,user_id) SELECT id,? FROM campaigns WHERE active=1')->execute([$userId]);
+        return $this->issue($userId);
+    }
+
     public function login(string $email, string $password): array
     {
         $stmt = $this->db->prepare('SELECT * FROM users WHERE email=? AND active=1');
