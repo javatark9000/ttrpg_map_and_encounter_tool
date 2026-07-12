@@ -24,8 +24,14 @@ final class WebSocketServer
     private function open(TcpConnection $conn): void
     {
         try {
-            $origin=$_ENV['APP_ORIGIN']??'';
-            if($origin && isset($_SERVER['HTTP_ORIGIN']) && $_SERVER['HTTP_ORIGIN']!==$origin) throw new RuntimeException('Origen no permitido.');
+            $configuredOrigins=array_values(array_filter(array_map('trim',explode(',',$_ENV['APP_ORIGIN']??''))));
+            $requestOrigin=$_SERVER['HTTP_ORIGIN']??'';
+            if($requestOrigin){
+                $originHost=mb_strtolower((string)(parse_url($requestOrigin,PHP_URL_HOST)??''));
+                $socketHost=mb_strtolower((string)(parse_url('//'.($_SERVER['HTTP_HOST']??''),PHP_URL_HOST)??''));
+                $explicitlyAllowed=in_array(rtrim($requestOrigin,'/'),array_map(fn($origin)=>rtrim($origin,'/'),$configuredOrigins),true);
+                if(!$explicitlyAllowed&&(!$originHost||!$socketHost||$originHost!==$socketHost)) throw new RuntimeException('Origen no permitido.');
+            }
             $user=$this->auth->fromToken($_COOKIE[Auth::COOKIE]??null);if(!$user)throw new RuntimeException('No autenticado.');
             $connectionId=bin2hex(random_bytes(16));
             if($user['role']==='DM'&&!$this->acquireDm((int)$user['id'],$connectionId))throw new RuntimeException('Ya hay un DM conectado.');

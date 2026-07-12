@@ -49,7 +49,7 @@ docker compose ps
 docker compose logs -f app websocket
 ```
 
-Abrir <http://localhost:8080>. Para detener los servicios: `docker compose down`. Los datos se conservan en volúmenes Docker.
+Abrir <http://localhost:8080>. Desde otro dispositivo de la red local, usar la IP del equipo, por ejemplo `http://192.168.100.71:8080`; los puertos TCP 8080 y 8081 deben estar permitidos por el firewall. El WebSocket acepta el mismo hostname con el que se abrió la aplicación. Para detener los servicios: `docker compose down`. Los datos se conservan en volúmenes Docker.
 
 Para desarrollo sin contenerizar PHP, se puede usar `composer install`, `composer serve` y `composer websocket start`, manteniendo MariaDB activa.
 
