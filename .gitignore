@@ -4,3 +4,11 @@
 !/storage/uploads/.gitkeep
 *.log
 .phpunit.result.cache
+
+# Private/generated seed data, local scraping utilities, and translation credentials
+/database/private/
+/scripts/private/
+/storage/cache/
+/translation-key.json
+*.private.sql
+*.private.json
