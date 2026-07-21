@@ -2,11 +2,21 @@
 /vendor/
 /storage/uploads/*
 !/storage/uploads/.gitkeep
+/storage/media/**
+!/storage/media/
+!/storage/media/.gitkeep
+!/storage/media/codex/
+!/storage/media/codex/.gitkeep
+!/storage/media/imports/
+!/storage/media/imports/.gitkeep
+!/storage/media/tmp/
+!/storage/media/tmp/.gitkeep
 *.log
 .phpunit.result.cache
 
-# Private/generated seed data, local scraping utilities, and translation credentials
+# Private/generated seed data, local scraping utilities, downloaded references, and translation credentials
 /database/private/
+/database/res/
 /scripts/private/
 /storage/cache/
 /translation-key.json

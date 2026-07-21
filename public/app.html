@@ -17,6 +17,7 @@
 <aside id="sidebar">
   <section><h2>Escenarios</h2><div id="scenario-list"></div><button id="new-scenario" class="dm-only">＋ Nuevo escenario</button></section>
   <section id="characters-panel"><h2>Personajes</h2><div id="character-list"></div><button id="new-character">＋ Nuevo personaje</button></section>
+  <section class="codex-panel"><button id="codex-button" type="button">Codex</button></section>
 </aside>
 <main>
   <div id="empty" class="empty"><h2>Elige un escenario</h2><p>El mapa aparecerá aquí.</p></div>
@@ -51,6 +52,10 @@
     <p id="dialog-error" class="error" role="alert"></p>
     <footer class="dialog-actions"><button type="button" id="dialog-cancel">Cancelar</button><button type="submit" id="dialog-submit" class="primary">Guardar</button></footer>
   </form>
+</dialog>
+<dialog id="codex-dialog" aria-labelledby="codex-title">
+  <div class="dialog-header"><div><h2 id="codex-title">Codex</h2></div><button type="button" id="codex-close" class="icon-button" aria-label="Cerrar">×</button></div>
+  <div id="codex-content" class="dialog-fields"></div>
 </dialog>
 <div id="toast" role="status"></div>
 <script type="module" src="/assets/app.js"></script>

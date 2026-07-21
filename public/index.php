@@ -38,6 +38,10 @@ try {
 
     $user=$auth->current(); if(!$user) throw new HttpError('Debes iniciar sesión.',401);
     if($path==='/api/bootstrap'&&$method==='GET') jsonOut($game->bootstrap($user));
+    if($path==='/api/codex/categories'&&$method==='GET') jsonOut(codexCategories($db));
+    if($path==='/api/codex/customization/options'&&$method==='GET'){ requireDm($user); jsonOut(codexCustomizationOptions($db)); }
+    if($path==='/api/codex/records'&&$method==='GET'){ requireDm($user); jsonOut(codexRecords($db,(string)($_GET['kind']??''),(string)($_GET['q']??''))); }
+    if($path==='/api/codex/customize'&&$method==='POST'){ requireDm($user); jsonOut(createCustomCodexRecord($db,$user,$body),201); }
     if(preg_match('#^/api/scenarios/(\d+)/snapshot$#',$path,$m)&&$method==='GET') jsonOut($game->snapshot((int)$m[1],$user));
 
     if($path==='/api/scenarios'&&$method==='POST'){
@@ -68,6 +72,65 @@ function ensureCsrf(): void { if(empty($_COOKIE['dnd_csrf']))setcookie('dnd_csrf
 function verifyCsrf(): void { $a=$_COOKIE['dnd_csrf']??'';$b=$_SERVER['HTTP_X_CSRF_TOKEN']??'';if(!$a||!$b||!hash_equals($a,$b))throw new HttpError('Token CSRF inválido.',419); }
 function requireDm(array $u): void { if($u['role']!=='DM')throw new HttpError('Acción exclusiva del DM.',403); }
 function assertMember(PDO $db,int $c,int $u): void{$q=$db->prepare('SELECT 1 FROM campaign_members WHERE campaign_id=? AND user_id=?');$q->execute([$c,$u]);if(!$q->fetchColumn())throw new HttpError('Sin acceso.',403);}
+function dbCount(PDO $db,string $table): int { try{return (int)$db->query("SELECT COUNT(*) FROM $table WHERE is_active=1")->fetchColumn();}catch(Throwable){return 0;} }
+function codexCategories(PDO $db): array {
+    return ['categories'=>[
+        ['code'=>'actions','name'=>'Acciones y hechizos','description'=>'Hechizos, rasgos, acciones y habilidades reutilizables.','count'=>dbCount($db,'actions')],
+        ['code'=>'creatures','name'=>'Criaturas','description'=>'Monstruos, NPCs y criaturas del codex.','count'=>dbCount($db,'creatures')],
+        ['code'=>'items','name'=>'Objetos','description'=>'Equipo, armas, armaduras, herramientas y objetos mágicos.','count'=>dbCount($db,'items')],
+        ['code'=>'feats','name'=>'Dotes','description'=>'Dotes regulares, raciales y custom.','count'=>dbCount($db,'feats')],
+        ['code'=>'species','name'=>'Especies','description'=>'Linajes base y especies jugables.','count'=>dbCount($db,'species')],
+        ['code'=>'subspecies','name'=>'Subespecies','description'=>'Variantes y sublinajes.','count'=>dbCount($db,'subspecies')],
+        ['code'=>'backgrounds','name'=>'Trasfondos','description'=>'Trasfondos de personaje.','count'=>dbCount($db,'backgrounds')],
+        ['code'=>'background_variants','name'=>'Variantes de trasfondo','description'=>'Variantes como Spy, Pirate, Knight, etc.','count'=>dbCount($db,'background_variants')],
+        ['code'=>'classes','name'=>'Clases','description'=>'Clases base disponibles.','count'=>dbCount($db,'classes')],
+        ['code'=>'subclasses','name'=>'Subclases','description'=>'Arquetipos, dominios, círculos y demás subclases.','count'=>dbCount($db,'subclasses')],
+    ]];
+}
+function codexCustomizationOptions(PDO $db): array {
+    $all=fn(string $sql): array=>$db->query($sql)->fetchAll();
+    return [
+        'creatureTypes'=>$all("SELECT id,name FROM creature_types WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY name"),
+        'creatureSizes'=>$all("SELECT id,name FROM creature_sizes WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY id"),
+        'itemTypes'=>$all("SELECT id,name FROM item_types WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY name"),
+        'itemRarities'=>$all("SELECT id,name FROM item_rarities WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY id"),
+    ];
+}
+function codexRecords(PDO $db,string $kind,string $q): array {
+    $q=trim($q); if(strlen($q)<2) throw new RuntimeException('Escribe al menos 2 caracteres para buscar.'); $like='%'.$q.'%';
+    if($kind==='creature'){
+        $st=$db->prepare("SELECT c.*,ct.name creature_type_name,cs.name creature_size_name,(SELECT GROUP_CONCAT(t.name ORDER BY t.name SEPARATOR ', ') FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='creature' AND crt.owner_id=c.id) tag_names FROM creatures c LEFT JOIN creature_types ct ON ct.id=c.creature_type_id LEFT JOIN creature_sizes cs ON cs.id=c.creature_size_id WHERE c.is_active=1 AND (c.name LIKE ? OR EXISTS(SELECT 1 FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='creature' AND crt.owner_id=c.id AND (t.name LIKE ? OR t.code LIKE ?))) ORDER BY c.is_custom ASC,c.name LIMIT 25");
+    } elseif($kind==='item') {
+        $st=$db->prepare("SELECT i.*,it.name item_type_name,ir.name item_rarity_name,(SELECT GROUP_CONCAT(t.name ORDER BY t.name SEPARATOR ', ') FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='item' AND crt.owner_id=i.id) tag_names FROM items i LEFT JOIN item_types it ON it.id=i.item_type_id LEFT JOIN item_rarities ir ON ir.id=i.item_rarity_id WHERE i.is_active=1 AND (i.name LIKE ? OR EXISTS(SELECT 1 FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='item' AND crt.owner_id=i.id AND (t.name LIKE ? OR t.code LIKE ?))) ORDER BY i.is_custom ASC,i.name LIMIT 25");
+    } else throw new RuntimeException('Tipo de registro inválido.');
+    $st->execute([$like,$like,$like]); return ['records'=>$st->fetchAll()];
+}
+function cleanCode(string $value): string { $value=strtolower(trim($value)); $value=preg_replace('/[^a-z0-9_-]+/','_',$value)??''; return trim($value,'_'); }
+function customMeta(PDO $db,string $table,string $identifier): void { if($identifier==='')throw new RuntimeException('El identificador custom es obligatorio.'); $st=$db->prepare("SELECT 1 FROM $table WHERE custom_identifier=? LIMIT 1");$st->execute([$identifier]);if($st->fetchColumn())throw new RuntimeException('Ese identificador custom ya existe.'); }
+function homebrewSourceId(PDO $db,int $systemId): ?int { $st=$db->prepare("SELECT id FROM sources WHERE system_id=? AND code='homebrew'");$st->execute([$systemId]);return ($id=$st->fetchColumn())?(int)$id:null; }
+function copyCodexTags(PDO $db,string $ownerType,int $sourceId,int $customId): void { $st=$db->prepare('INSERT IGNORE INTO codex_record_tags(owner_type,owner_id,tag_id) SELECT owner_type,?,tag_id FROM codex_record_tags WHERE owner_type=? AND owner_id=?');$st->execute([$customId,$ownerType,$sourceId]); }
+function createCustomCodexRecord(PDO $db,array $user,array $body): array {
+    $kind=(string)($body['kind']??''); $sourceId=(int)($body['sourceId']??0); if($sourceId<1)throw new RuntimeException('Selecciona un registro base.');
+    $name=trim((string)($body['name']??'')); if($name==='')throw new RuntimeException('Escribe un nombre.');
+    $identifier=cleanCode((string)($body['customIdentifier']??'')); $tag=trim((string)($body['customTag']??'Homebrew')) ?: 'Homebrew';
+    if($kind==='creature'){
+        customMeta($db,'creatures',$identifier); $st=$db->prepare('SELECT * FROM creatures WHERE id=?');$st->execute([$sourceId]);$src=$st->fetch(); if(!$src)throw new RuntimeException('Criatura base inexistente.');
+        $systemId=(int)$src['system_id']; $sourceMaterialId=homebrewSourceId($db,$systemId); $num=fn(string $k)=>isset($body[$k])&&$body[$k]!==''?(int)$body[$k]:null; $txt=fn(string $k,string $s)=>array_key_exists($k,$body)?trim((string)$body[$k]):($src[$s]??null);
+        $sql='INSERT INTO creatures(system_id,creature_type_id,creature_size_id,visibility_level_id,source_creature_id,created_by_user_id,source_material_id,custom_identifier,custom_tag,name,short_description,description,armor_class_text,hit_points_text,speed_text,strength,dexterity,constitution,intelligence,wisdom,charisma,saving_throws_text,skills_text,damage_resistances_text,damage_immunities_text,damage_vulnerabilities_text,condition_immunities_text,senses_text,languages_text,challenge_rating_text,experience_points,traits_text,equipment_text,environment_text,is_custom,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1)';
+        $db->prepare($sql)->execute([$systemId,$num('creatureTypeId')??$src['creature_type_id'],$num('creatureSizeId')??$src['creature_size_id'],$src['visibility_level_id'],$sourceId,$user['id'],$sourceMaterialId,$identifier,$tag,$name,$txt('shortDescription','short_description'),$txt('description','description'),$txt('armorClassText','armor_class_text'),$txt('hitPointsText','hit_points_text'),$txt('speedText','speed_text'),$num('strength')??$src['strength'],$num('dexterity')??$src['dexterity'],$num('constitution')??$src['constitution'],$num('intelligence')??$src['intelligence'],$num('wisdom')??$src['wisdom'],$num('charisma')??$src['charisma'],$txt('savingThrowsText','saving_throws_text'),$txt('skillsText','skills_text'),$txt('damageResistancesText','damage_resistances_text'),$txt('damageImmunitiesText','damage_immunities_text'),$txt('damageVulnerabilitiesText','damage_vulnerabilities_text'),$txt('conditionImmunitiesText','condition_immunities_text'),$txt('sensesText','senses_text'),$txt('languagesText','languages_text'),$txt('challengeRatingText','challenge_rating_text'),$num('experiencePoints')??$src['experience_points'],$txt('traitsText','traits_text'),$txt('equipmentText','equipment_text'),$txt('environmentText','environment_text')]);
+        $id=(int)$db->lastInsertId(); copyCodexTags($db,'creature',$sourceId,$id);
+        return ['id'=>$id,'kind'=>'creature','customIdentifier'=>$identifier];
+    }
+    if($kind==='item'){
+        customMeta($db,'items',$identifier); $st=$db->prepare('SELECT * FROM items WHERE id=?');$st->execute([$sourceId]);$src=$st->fetch(); if(!$src)throw new RuntimeException('Objeto base inexistente.');
+        $systemId=(int)$src['system_id']; $sourceMaterialId=homebrewSourceId($db,$systemId); $num=fn(string $k)=>isset($body[$k])&&$body[$k]!==''?(int)$body[$k]:null; $txt=fn(string $k,string $s)=>array_key_exists($k,$body)?trim((string)$body[$k]):($src[$s]??null); $bool=fn(string $k,string $s)=>array_key_exists($k,$body)?(!empty($body[$k])?1:0):(int)$src[$s];
+        $sql='INSERT INTO items(system_id,item_type_id,item_rarity_id,visibility_level_id,source_item_id,created_by_user_id,source_material_id,custom_identifier,custom_tag,name,short_description,description,requires_attunement,weight_text,value_text,armor_class_text,damage_text,properties_text,charges_text,resource_cost_text,requirements_text,is_magical,is_consumable,is_custom,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1)';
+        $db->prepare($sql)->execute([$systemId,$num('itemTypeId')??$src['item_type_id'],$num('itemRarityId')??$src['item_rarity_id'],$src['visibility_level_id'],$sourceId,$user['id'],$sourceMaterialId,$identifier,$tag,$name,$txt('shortDescription','short_description'),$txt('description','description'),$bool('requiresAttunement','requires_attunement'),$txt('weightText','weight_text'),$txt('valueText','value_text'),$txt('armorClassText','armor_class_text'),$txt('damageText','damage_text'),$txt('propertiesText','properties_text'),$txt('chargesText','charges_text'),$txt('resourceCostText','resource_cost_text'),$txt('requirementsText','requirements_text'),$bool('isMagical','is_magical'),$bool('isConsumable','is_consumable')]);
+        $id=(int)$db->lastInsertId(); copyCodexTags($db,'item',$sourceId,$id);
+        return ['id'=>$id,'kind'=>'item','customIdentifier'=>$identifier];
+    }
+    throw new RuntimeException('Tipo de registro inválido.');
+}
 function uploadAsset(PDO $db,array $user): array {
     if(!isset($_FILES['image'])) {
         $length=(int)($_SERVER['CONTENT_LENGTH']??0);
