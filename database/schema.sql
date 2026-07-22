@@ -150,6 +150,7 @@ CREATE TABLE npc_characters (
  notes MEDIUMTEXT NULL,
  image_asset_id BIGINT UNSIGNED NULL,
  health INT NOT NULL DEFAULT 1,
+ armor_class INT NULL,
  initiative INT NULL,
  visible BOOLEAN NOT NULL DEFAULT TRUE,
  dead_hidden BOOLEAN NOT NULL DEFAULT FALSE,

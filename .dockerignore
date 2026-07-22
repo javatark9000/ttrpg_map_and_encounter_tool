@@ -1,7 +1,18 @@
 .git
 .env
 vendor
-storage/uploads/*
-!storage/uploads/.gitkeep
 node_modules
 *.log
+
+# Private/generated/local data should not be copied into app images.
+database/private/
+database/migrations/
+database/res/
+scripts/private/
+storage/cache/
+storage/media/
+storage/uploads/*
+!storage/uploads/.gitkeep
+translation-key.json
+*.private.sql
+*.private.json

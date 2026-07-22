@@ -80,7 +80,7 @@ final class GameService
             $s=$this->one('SELECT * FROM scenarios WHERE id=? FOR UPDATE',[$scenarioId]);
             if(!$s) throw new RuntimeException('Escenario inexistente.');
             $this->assertMember((int)$s['campaign_id'],(int)$user['id']);
-            $dmOnly=['scenario.activate','scenario.deactivate','map.cells.paint','object.create','objects.bulk_update','tokens.bulk_update','npc.create','token.update','token.move_dm','movement.approve','movement.reject','encounter.prepare','encounter.start','encounter.stop','initiative.set','initiative.reorder_tie','turn.next','turn.delay_order','health.set','cell.note','player.note'];
+            $dmOnly=['scenario.activate','scenario.deactivate','map.cells.paint','object.create','objects.bulk_update','tokens.bulk_update','tokens.delete','npc.create','token.update','token.delete','token.move_dm','movement.approve','movement.reject','encounter.prepare','encounter.start','encounter.stop','initiative.set','initiative.reorder_tie','turn.next','turn.delay_order','health.set','cell.note','player.note'];
             if(in_array($type,$dmOnly,true) && $user['role']!=='DM') throw new RuntimeException('Acción exclusiva del DM.');
             $data=match($type){
                 'scenario.activate'=>$this->activate($scenarioId,true),
@@ -91,8 +91,10 @@ final class GameService
                 'object.create'=>$this->createObject($s,$p),
                 'objects.bulk_update'=>$this->bulkUpdateObjects($s,$p),
                 'tokens.bulk_update'=>$this->bulkUpdateTokens($s,$p),
-                'npc.create'=>$this->createNpc($s,$p),
+                'tokens.delete'=>$this->deleteTokens($s,$p),
+                'npc.create'=>$this->createNpc($s,$p,$user),
                 'token.update'=>$this->updateToken($s,$p),
+                'token.delete'=>$this->deleteToken($s,$p),
                 'token.move_dm'=>$this->moveDm($s,$p),
                 'player.place'=>$this->placePlayer($s,$user,$p),
                 'movement.submit'=>$this->submitMovement($s,$user,$p),
@@ -137,15 +139,62 @@ final class GameService
     private function createObject(array $s,array $p): array { [$x,$y]=$this->coords($s,$p);$width=(int)($p['widthCells']??1);$height=(int)($p['heightCells']??1);$this->validateObjectSize($s,$x,$y,$width,$height);$this->db->prepare('INSERT INTO map_objects(scenario_id,name,x,y,width_cells,height_cells,notes,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'Objeto'))?:'Objeto',$x,$y,$width,$height,$p['notes']??null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]);return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'OBJECT','x'=>$x,'y'=>$y,'widthCells'=>$width,'heightCells'=>$height]; }
     private function bulkUpdateObjects(array $s,array $p): array { $ids=array_values(array_unique(array_filter(array_map('intval',(array)($p['objectIds']??[])),fn($id)=>$id>0)));if(!$ids||count($ids)>200)throw new RuntimeException('Selecciona entre 1 y 200 objetos.');$sets=[];$values=[];if(array_key_exists('visible',$p)){$sets[]='visible=?';$values[]=!empty($p['visible'])?1:0;}if(array_key_exists('image_asset_id',$p)){$sets[]='image_asset_id=?';$values[]=(int)$p['image_asset_id'];}if(!$sets)throw new RuntimeException('No hay cambios para aplicar.');$placeholders=implode(',',array_fill(0,count($ids),'?'));$values[]=$s['id'];array_push($values,...$ids);$this->db->prepare('UPDATE map_objects SET '.implode(',',$sets)." WHERE scenario_id=? AND id IN ($placeholders)")->execute($values);return ['objectIds'=>$ids,'updated'=>$this->db->query('SELECT ROW_COUNT()')->fetchColumn()]; }
     private function bulkUpdateTokens(array $s,array $p): array { $items=array_slice((array)($p['items']??[]),0,201);if(!$items||count($items)>200)throw new RuntimeException('Selecciona entre 1 y 200 elementos.');$objects=[];$npcs=[];foreach($items as $item){$kind=strtoupper((string)($item['kind']??''));$id=(int)($item['id']??0);if($id<1)continue;if($kind==='OBJECT')$objects[]=$id;elseif($kind==='NPC')$npcs[]=$id;else throw new RuntimeException('Tipo de elemento no permitido.');}$objects=array_values(array_unique($objects));$npcs=array_values(array_unique($npcs));if(!$objects&&!$npcs)throw new RuntimeException('Selección inválida.');$sets=[];$values=[];if(array_key_exists('visible',$p)){$sets[]='visible=?';$values[]=!empty($p['visible'])?1:0;}if(array_key_exists('image_asset_id',$p)){$sets[]='image_asset_id=?';$values[]=(int)$p['image_asset_id'];}if(!$sets)throw new RuntimeException('No hay cambios para aplicar.');$updated=0;foreach([['map_objects',$objects],['npc_characters',$npcs]] as [$table,$ids]){if(!$ids)continue;$placeholders=implode(',',array_fill(0,count($ids),'?'));$params=$values;$params[]=$s['id'];array_push($params,...$ids);$q=$this->db->prepare("UPDATE $table SET ".implode(',',$sets)." WHERE scenario_id=? AND id IN ($placeholders)");$q->execute($params);$updated+=$q->rowCount();}return ['items'=>$items,'updated'=>$updated]; }
-    private function createNpc(array $s,array $p): array { [$x,$y]=$this->coords($s,$p); $this->db->prepare('INSERT INTO npc_characters(scenario_id,name,x,y,notes,health,initiative,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'NPC'))?:'NPC',$x,$y,$p['notes']??null,(int)($p['health']??1),isset($p['initiative'])?(int)$p['initiative']:null,!empty($p['visible'])?1:0,$p['imageAssetId']??null]); return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'NPC','x'=>$x,'y'=>$y]; }
+    private function createNpc(array $s,array $p,array $user): array { [$x,$y]=$this->coords($s,$p); $imageAssetId=$p['imageAssetId']??null; $stats=[]; if(!empty($p['codexCreatureId'])){$cid=(int)$p['codexCreatureId']; if(!$imageAssetId) $imageAssetId=$this->codexCreatureAssetId($user,$cid); $stats=$this->codexCreatureStats($cid);} $health=array_key_exists('health',$p)?(int)$p['health']:(int)($stats['health']??1); $armorClass=array_key_exists('armorClass',$p)&&$p['armorClass']!==''?(int)$p['armorClass']:($stats['armorClass']??null); $this->db->prepare('INSERT INTO npc_characters(scenario_id,name,x,y,notes,health,armor_class,initiative,visible,image_asset_id) VALUES (?,?,?,?,?,?,?,?,?,?)')->execute([$s['id'],trim((string)($p['name']??'NPC'))?:'NPC',$x,$y,$p['notes']??null,$health,$armorClass,isset($p['initiative'])?(int)$p['initiative']:null,!empty($p['visible'])?1:0,$imageAssetId]); return ['id'=>(int)$this->db->lastInsertId(),'kind'=>'NPC','x'=>$x,'y'=>$y]; }
+    private function codexCreatureStats(int $creatureId): array
+    {
+        if($creatureId<1) return [];
+        $st=$this->db->prepare('SELECT hit_points_text,armor_class_text FROM creatures WHERE id=? AND is_active=1'); $st->execute([$creatureId]); $c=$st->fetch(); if(!$c) return [];
+        $num=function($v): ?int { return preg_match('/\d+/',(string)$v,$m)?(int)$m[0]:null; };
+        return ['health'=>$num($c['hit_points_text']??null),'armorClass'=>$num($c['armor_class_text']??null)];
+    }
+    private function codexCreatureAssetId(array $user,int $creatureId): ?int
+    {
+        if($creatureId<1) return null;
+        $st=$this->db->prepare("SELECT ma.storage_path,ma.mime_type,ma.size_bytes FROM creatures c JOIN codex_media_links cml ON cml.entity_type='creature' AND cml.entity_id=c.id JOIN media_assets ma ON ma.id=cml.media_asset_id JOIN media_purposes mp ON mp.id=cml.media_purpose_id WHERE c.id=? AND c.is_active=1 AND ma.is_active=1 ORDER BY FIELD(mp.code,'token','portrait','miniature','reference'), cml.is_primary DESC, cml.sort_order, ma.id LIMIT 1");
+        $st->execute([$creatureId]); $media=$st->fetch(); if(!$media||empty($media['storage_path'])) return null;
+        $path=(string)$media['storage_path'];
+        $existing=$this->one('SELECT id FROM assets WHERE path=? LIMIT 1',[$path]); if($existing) return (int)$existing['id'];
+        $base=realpath(dirname(__DIR__).'/storage/uploads'); $file=$base?realpath($base.'/'.str_replace(['..','\\'],['','/'],$path)):false;
+        if(!$base||!$file||!str_starts_with($file,$base)||!is_file($file)) return null;
+        $info=@getimagesize($file); if(!$info) return null;
+        $this->db->prepare('INSERT INTO assets(owner_id,mime,size_bytes,width,height,path) VALUES (?,?,?,?,?,?)')->execute([(int)$user['id'],(string)$media['mime_type'],(int)$media['size_bytes'],(int)$info[0],(int)$info[1],$path]);
+        return (int)$this->db->lastInsertId();
+    }
+
+    private function deleteTokens(array $s,array $p): array
+    {
+        $items=array_slice((array)($p['items']??[]),0,201); if(!$items||count($items)>200) throw new RuntimeException('Selecciona entre 1 y 200 elementos.');
+        $objects=[]; $npcs=[];
+        foreach($items as $item){$kind=strtoupper((string)($item['kind']??''));$id=(int)($item['id']??0);if($id<1)continue;if($kind==='OBJECT')$objects[]=$id;elseif($kind==='NPC')$npcs[]=$id;else throw new RuntimeException('No se puede eliminar uno de los tokens seleccionados.');}
+        $objects=array_values(array_unique($objects)); $npcs=array_values(array_unique($npcs)); if(!$objects&&!$npcs) throw new RuntimeException('Selección inválida.');
+        $deleted=0;
+        if($npcs){$ph=implode(',',array_fill(0,count($npcs),'?'));$enc=$this->one('SELECT id FROM encounters WHERE scenario_id=?',[$s['id']]);if($enc){$params=[$enc['id']];array_push($params,...$npcs);$this->db->prepare("DELETE FROM encounter_participants WHERE encounter_id=? AND actor_type='NPC' AND actor_id IN ($ph)")->execute($params);} $params=[$s['id']];array_push($params,...$npcs);$q=$this->db->prepare("DELETE FROM npc_characters WHERE scenario_id=? AND id IN ($ph)");$q->execute($params);$deleted+=$q->rowCount();}
+        if($objects){$ph=implode(',',array_fill(0,count($objects),'?'));$params=[$s['id']];array_push($params,...$objects);$q=$this->db->prepare("DELETE FROM map_objects WHERE scenario_id=? AND id IN ($ph)");$q->execute($params);$deleted+=$q->rowCount();}
+        return ['items'=>$items,'deleted'=>$deleted];
+    }
+
+    private function deleteToken(array $s,array $p): array
+    {
+        $kind=strtoupper((string)($p['kind']??'')); $id=(int)($p['id']??0);
+        if($id<1) throw new RuntimeException('Token inválido.');
+        if($kind==='NPC') {
+            $enc=$this->one('SELECT id FROM encounters WHERE scenario_id=?',[$s['id']]);
+            if($enc) $this->db->prepare("DELETE FROM encounter_participants WHERE encounter_id=? AND actor_type='NPC' AND actor_id=?")->execute([$enc['id'],$id]);
+            $this->db->prepare('DELETE FROM npc_characters WHERE id=? AND scenario_id=?')->execute([$id,$s['id']]);
+        } elseif($kind==='OBJECT') {
+            $this->db->prepare('DELETE FROM map_objects WHERE id=? AND scenario_id=?')->execute([$id,$s['id']]);
+        } else throw new RuntimeException('No se puede eliminar este token.');
+        if($this->db->query('SELECT ROW_COUNT()')->fetchColumn()<1) throw new RuntimeException('Token inexistente.');
+        return ['kind'=>$kind,'id'=>$id];
+    }
 
     private function updateToken(array $s,array $p): array
     {
         $kind=strtoupper((string)($p['kind']??'')); $id=(int)($p['id']??0);
-        if($kind==='NPC') { $fields=['name','notes','health','initiative','visible','dead_hidden','image_asset_id']; $table='npc_characters'; }
+        if($kind==='NPC') { $fields=['name','notes','health','armor_class','initiative','visible','dead_hidden','image_asset_id']; $table='npc_characters'; }
         elseif($kind==='OBJECT') { $fields=['name','notes','visible','image_asset_id','width_cells','height_cells']; $table='map_objects';if(array_key_exists('width_cells',$p)||array_key_exists('height_cells',$p)){$current=$this->one('SELECT * FROM map_objects WHERE id=? AND scenario_id=?',[$id,$s['id']]);if(!$current)throw new RuntimeException('Objeto inexistente.');$this->validateObjectSize($s,(int)$current['x'],(int)$current['y'],(int)($p['width_cells']??$current['width_cells']),(int)($p['height_cells']??$current['height_cells']));} }
         else throw new RuntimeException('Tipo de token inválido.');
-        $sets=[];$vals=[]; foreach($fields as $f)if(array_key_exists($f,$p)){$value=$p[$f];if(in_array($f,['visible','dead_hidden'],true))$value=!empty($value)?1:0;elseif(in_array($f,['health','width_cells','height_cells'],true))$value=(int)$value;elseif($f==='initiative')$value=$value===null||$value===''?null:(int)$value;elseif($f==='image_asset_id')$value=$value===null||$value===''?null:(int)$value;else $value=(string)$value;$sets[]="$f=?";$vals[]=$value;}
+        $sets=[];$vals=[]; foreach($fields as $f)if(array_key_exists($f,$p)){$value=$p[$f];if(in_array($f,['visible','dead_hidden'],true))$value=!empty($value)?1:0;elseif(in_array($f,['health','width_cells','height_cells'],true))$value=(int)$value;elseif(in_array($f,['initiative','armor_class'],true))$value=$value===null||$value===''?null:(int)$value;elseif($f==='image_asset_id')$value=$value===null||$value===''?null:(int)$value;else $value=(string)$value;$sets[]="$f=?";$vals[]=$value;}
         if(!$sets)throw new RuntimeException('No hay cambios.'); $vals[]=$id;$vals[]=$s['id'];
         $this->db->prepare("UPDATE $table SET ".implode(',',$sets).' WHERE id=? AND scenario_id=?')->execute($vals);
         return ['kind'=>$kind,'id'=>$id];
