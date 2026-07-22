@@ -46,7 +46,8 @@ try {
     if($path==='/api/codex/customization/options'&&$method==='GET'){ requireDm($user); jsonOut(codexCustomizationOptions($db)); }
     if($path==='/api/codex/records'&&$method==='GET'){ requireDm($user); jsonOut(codexRecords($db,(string)($_GET['kind']??''),(string)($_GET['q']??''))); }
     if($path==='/api/codex/customize'&&$method==='POST'){ requireDm($user); jsonOut(createCustomCodexRecord($db,$user,$body),201); }
-    if(preg_match('#^/api/codex/customize/(creature|item)/(\d+)$#',$path,$m)&&$method==='PATCH'){ requireDm($user); jsonOut(updateCustomCodexRecord($db,$user,$m[1],(int)$m[2],$body)); }
+    if($path==='/api/codex/customize/media'&&$method==='POST'){ requireDm($user); jsonOut(uploadCustomCodexMedia($db,$user),201); }
+    if(preg_match('#^/api/codex/customize/(creature|item|spell)/(\d+)$#',$path,$m)&&$method==='PATCH'){ requireDm($user); jsonOut(updateCustomCodexRecord($db,$user,$m[1],(int)$m[2],$body)); }
     if(preg_match('#^/api/scenarios/(\d+)/snapshot$#',$path,$m)&&$method==='GET') jsonOut($game->snapshot((int)$m[1],$user));
 
     if($path==='/api/scenarios'&&$method==='POST'){
@@ -140,7 +141,7 @@ function codexActionDetail(PDO $db,array $user,int $id): array {
     $tags=$db->prepare('SELECT t.name FROM action_tags atg JOIN tags t ON t.id=atg.tag_id WHERE atg.action_id=? ORDER BY t.name');$tags->execute([$id]);
     $classes=$db->prepare('SELECT c.name FROM action_class_availability aca JOIN classes c ON c.id=aca.class_id WHERE aca.action_id=? ORDER BY c.name');$classes->execute([$id]);
     $owners=$db->prepare("SELECT c.name FROM action_assignments aa JOIN creatures c ON c.id=aa.owner_id WHERE aa.action_id=? AND aa.owner_type='creature' ORDER BY c.name");$owners->execute([$id]);
-    return ['record'=>$action,'tags'=>array_column($tags->fetchAll(),'name'),'classes'=>array_column($classes->fetchAll(),'name'),'owners'=>array_column($owners->fetchAll(),'name')];
+    return ['record'=>$action,'tags'=>array_column($tags->fetchAll(),'name'),'classes'=>array_column($classes->fetchAll(),'name'),'owners'=>array_column($owners->fetchAll(),'name'),'media'=>codexEntityMedia($db,'action',$id,$user)];
 }
 function codexRecordDetail(PDO $db,array $user,string $category,int $id): array {
     if($category==='creatures' && $user['role']!=='DM') throw new HttpError('Contenido exclusivo del DM.',403);
@@ -158,6 +159,7 @@ function codexRecordDetail(PDO $db,array $user,string $category,int $id): array 
     if($category==='subclasses')$labels['class']=dbLookup($db,'classes',$record['class_id']??null);
     $media=[];
     if($category==='creatures') $media=codexEntityMedia($db,'creature',$id,$user);
+    if($category==='items') $media=codexEntityMedia($db,'item',$id,$user);
     return ['record'=>$record,'tags'=>array_column($tags->fetchAll(),'name'),'labels'=>$labels,'media'=>$media];
 }
 function dbLookup(PDO $db,string $table,mixed $id): ?string { if(!$id)return null; $st=$db->prepare("SELECT name FROM $table WHERE id=?");$st->execute([$id]); return ($v=$st->fetchColumn())?(string)$v:null; }
@@ -190,6 +192,10 @@ function codexCustomizationOptions(PDO $db): array {
         'creatureSizes'=>$all("SELECT id,name FROM creature_sizes WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY id"),
         'itemTypes'=>$all("SELECT id,name FROM item_types WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY name"),
         'itemRarities'=>$all("SELECT id,name FROM item_rarities WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY id"),
+        'activationTypes'=>$all("SELECT id,name FROM activation_types ORDER BY name"),
+        'magicSchools'=>$all("SELECT id,name FROM magic_schools WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY name"),
+        'savingThrowTypes'=>$all("SELECT id,name FROM saving_throw_types WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY name"),
+        'attackRollTypes'=>$all("SELECT id,name FROM attack_roll_types WHERE system_id=(SELECT id FROM systems WHERE code='dnd_5e') ORDER BY name"),
     ];
 }
 function codexRecords(PDO $db,string $kind,string $q): array {
@@ -198,6 +204,9 @@ function codexRecords(PDO $db,string $kind,string $q): array {
         $st=$db->prepare("SELECT c.*,ct.name creature_type_name,cs.name creature_size_name,(SELECT GROUP_CONCAT(t.name ORDER BY t.name SEPARATOR ', ') FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='creature' AND crt.owner_id=c.id) tag_names FROM creatures c LEFT JOIN creature_types ct ON ct.id=c.creature_type_id LEFT JOIN creature_sizes cs ON cs.id=c.creature_size_id WHERE c.is_active=1 AND (c.name LIKE ? OR EXISTS(SELECT 1 FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='creature' AND crt.owner_id=c.id AND (t.name LIKE ? OR t.code LIKE ?))) ORDER BY c.is_custom ASC,c.name LIMIT 25");
     } elseif($kind==='item') {
         $st=$db->prepare("SELECT i.*,it.name item_type_name,ir.name item_rarity_name,(SELECT GROUP_CONCAT(t.name ORDER BY t.name SEPARATOR ', ') FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='item' AND crt.owner_id=i.id) tag_names FROM items i LEFT JOIN item_types it ON it.id=i.item_type_id LEFT JOIN item_rarities ir ON ir.id=i.item_rarity_id WHERE i.is_active=1 AND (i.name LIKE ? OR EXISTS(SELECT 1 FROM codex_record_tags crt JOIN tags t ON t.id=crt.tag_id WHERE crt.owner_type='item' AND crt.owner_id=i.id AND (t.name LIKE ? OR t.code LIKE ?))) ORDER BY i.is_custom ASC,i.name LIMIT 25");
+    } elseif($kind==='spell') {
+        $st=$db->prepare("SELECT a.*,ms.name magic_school_name,(SELECT GROUP_CONCAT(t.name ORDER BY t.name SEPARATOR ', ') FROM action_tags atg JOIN tags t ON t.id=atg.tag_id WHERE atg.action_id=a.id) tag_names FROM actions a JOIN action_categories ac ON ac.id=a.action_category_id LEFT JOIN magic_schools ms ON ms.id=a.magic_school_id WHERE a.is_active=1 AND ac.code='spell' AND (a.name LIKE ? OR a.short_description LIKE ? OR a.description LIKE ? OR EXISTS(SELECT 1 FROM action_tags atg JOIN tags t ON t.id=atg.tag_id WHERE atg.action_id=a.id AND (t.name LIKE ? OR t.code LIKE ?))) ORDER BY a.is_custom ASC,a.name LIMIT 25");
+        $st->execute([$like,$like,$like,$like,$like]); return ['records'=>$st->fetchAll()];
     } else throw new RuntimeException('Tipo de registro inválido.');
     $st->execute([$like,$like,$like]); return ['records'=>$st->fetchAll()];
 }
@@ -206,6 +215,8 @@ function customMeta(PDO $db,string $table,string $identifier,?int $ignoreId=null
 function homebrewSourceId(PDO $db,int $systemId): ?int { $st=$db->prepare("SELECT id FROM sources WHERE system_id=? AND code='homebrew'");$st->execute([$systemId]);return ($id=$st->fetchColumn())?(int)$id:null; }
 function copyCodexTags(PDO $db,string $ownerType,int $sourceId,int $customId): void { $st=$db->prepare('INSERT IGNORE INTO codex_record_tags(owner_type,owner_id,tag_id) SELECT owner_type,?,tag_id FROM codex_record_tags WHERE owner_type=? AND owner_id=?');$st->execute([$customId,$ownerType,$sourceId]); }
 function copyCodexMediaLinks(PDO $db,string $entityType,int $sourceId,int $customId): void { $st=$db->prepare('INSERT IGNORE INTO codex_media_links(media_asset_id,entity_type,entity_id,media_purpose_id,visibility_level_id,title,caption,sort_order,is_primary) SELECT media_asset_id,entity_type,?,media_purpose_id,visibility_level_id,title,caption,sort_order,is_primary FROM codex_media_links WHERE entity_type=? AND entity_id=?');$st->execute([$customId,$entityType,$sourceId]); }
+function copyActionTags(PDO $db,int $sourceId,int $customId): void { $st=$db->prepare('INSERT IGNORE INTO action_tags(action_id,tag_id) SELECT ?,tag_id FROM action_tags WHERE action_id=?');$st->execute([$customId,$sourceId]); }
+function copyActionClassAvailability(PDO $db,int $sourceId,int $customId): void { $st=$db->prepare('INSERT IGNORE INTO action_class_availability(action_id,class_id,notes) SELECT ?,class_id,notes FROM action_class_availability WHERE action_id=?');$st->execute([$customId,$sourceId]); }
 function codexCustomInput(array $body,array $src): array {
     $num=fn(string $k)=>isset($body[$k])&&$body[$k]!==''?(int)$body[$k]:null;
     $txt=fn(string $k,string $s)=>array_key_exists($k,$body)?trim((string)$body[$k]):($src[$s]??null);
@@ -232,6 +243,14 @@ function createCustomCodexRecord(PDO $db,array $user,array $body): array {
         $id=(int)$db->lastInsertId(); copyCodexTags($db,'item',$sourceId,$id); copyCodexMediaLinks($db,'item',$sourceId,$id);
         return ['id'=>$id,'kind'=>'item','customIdentifier'=>$identifier];
     }
+    if($kind==='spell'){
+        customMeta($db,'actions',$identifier); $st=$db->prepare("SELECT a.* FROM actions a JOIN action_categories ac ON ac.id=a.action_category_id WHERE a.id=? AND ac.code='spell'");$st->execute([$sourceId]);$src=$st->fetch(); if(!$src)throw new RuntimeException('Conjuro base inexistente.');
+        $systemId=(int)$src['system_id']; $h=codexCustomInput($body,$src); $num=$h['num']; $txt=$h['txt']; $bool=$h['bool'];
+        $sql='INSERT INTO actions(system_id,action_category_id,activation_type_id,visibility_level_id,source_action_id,created_by_user_id,custom_identifier,custom_tag,name,short_description,description,range_text,duration_text,damage_text,healing_text,saving_throw_type_id,attack_roll_type_id,spell_level,magic_school_id,components_text,requires_concentration,is_ritual,resource_cost_text,scaling_text,is_custom,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1)';
+        $db->prepare($sql)->execute([$systemId,$src['action_category_id'],$num('activationTypeId')??$src['activation_type_id'],$src['visibility_level_id'],$sourceId,$user['id'],$identifier,$tag,$name,$txt('shortDescription','short_description'),$txt('description','description'),$txt('rangeText','range_text'),$txt('durationText','duration_text'),$txt('damageText','damage_text'),$txt('healingText','healing_text'),$num('savingThrowTypeId')??$src['saving_throw_type_id'],$num('attackRollTypeId')??$src['attack_roll_type_id'],$num('spellLevel')??$src['spell_level'],$num('magicSchoolId')??$src['magic_school_id'],$txt('componentsText','components_text'),$bool('requiresConcentration','requires_concentration'),$bool('isRitual','is_ritual'),$txt('resourceCostText','resource_cost_text'),$txt('scalingText','scaling_text')]);
+        $id=(int)$db->lastInsertId(); copyActionTags($db,$sourceId,$id); copyActionClassAvailability($db,$sourceId,$id);
+        return ['id'=>$id,'kind'=>'spell','customIdentifier'=>$identifier];
+    }
     throw new RuntimeException('Tipo de registro inválido.');
 }
 function updateCustomCodexRecord(PDO $db,array $user,string $kind,int $id,array $body): array {
@@ -251,7 +270,33 @@ function updateCustomCodexRecord(PDO $db,array $user,string $kind,int $id,array 
         $db->prepare($sql)->execute([$num('itemTypeId')??$src['item_type_id'],$num('itemRarityId')??$src['item_rarity_id'],$identifier,$tag,$name,$txt('shortDescription','short_description'),$txt('description','description'),$bool('requiresAttunement','requires_attunement'),$txt('weightText','weight_text'),$txt('valueText','value_text'),$txt('armorClassText','armor_class_text'),$txt('damageText','damage_text'),$txt('propertiesText','properties_text'),$txt('chargesText','charges_text'),$txt('resourceCostText','resource_cost_text'),$txt('requirementsText','requirements_text'),$bool('isMagical','is_magical'),$bool('isConsumable','is_consumable'),$id]);
         return ['id'=>$id,'kind'=>'item','customIdentifier'=>$identifier];
     }
+    if($kind==='spell'){
+        customMeta($db,'actions',$identifier,$id); $st=$db->prepare("SELECT a.* FROM actions a JOIN action_categories ac ON ac.id=a.action_category_id WHERE a.id=? AND a.is_custom=1 AND ac.code='spell'");$st->execute([$id]);$src=$st->fetch(); if(!$src)throw new RuntimeException('Solo puedes editar conjuros custom existentes.');
+        $h=codexCustomInput($body,$src); $num=$h['num']; $txt=$h['txt']; $bool=$h['bool'];
+        $sql='UPDATE actions SET activation_type_id=?,custom_identifier=?,custom_tag=?,name=?,short_description=?,description=?,range_text=?,duration_text=?,damage_text=?,healing_text=?,saving_throw_type_id=?,attack_roll_type_id=?,spell_level=?,magic_school_id=?,components_text=?,requires_concentration=?,is_ritual=?,resource_cost_text=?,scaling_text=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND is_custom=1';
+        $db->prepare($sql)->execute([$num('activationTypeId')??$src['activation_type_id'],$identifier,$tag,$name,$txt('shortDescription','short_description'),$txt('description','description'),$txt('rangeText','range_text'),$txt('durationText','duration_text'),$txt('damageText','damage_text'),$txt('healingText','healing_text'),$num('savingThrowTypeId')??$src['saving_throw_type_id'],$num('attackRollTypeId')??$src['attack_roll_type_id'],$num('spellLevel')??$src['spell_level'],$num('magicSchoolId')??$src['magic_school_id'],$txt('componentsText','components_text'),$bool('requiresConcentration','requires_concentration'),$bool('isRitual','is_ritual'),$txt('resourceCostText','resource_cost_text'),$txt('scalingText','scaling_text'),$id]);
+        return ['id'=>$id,'kind'=>'spell','customIdentifier'=>$identifier];
+    }
     throw new RuntimeException('Tipo de registro inválido.');
+}
+function uploadCustomCodexMedia(PDO $db,array $user): array {
+    $kind=(string)($_POST['kind']??''); $id=(int)($_POST['id']??0); if($id<1) throw new RuntimeException('Registro custom inválido.');
+    $map=['creature'=>['table'=>'creatures','entity'=>'creature','purpose'=>'portrait'],'item'=>['table'=>'items','entity'=>'item','purpose'=>'icon'],'spell'=>['table'=>'actions','entity'=>'action','purpose'=>'icon']];
+    if(!isset($map[$kind])) throw new RuntimeException('Tipo de registro inválido.');
+    $m=$map[$kind];
+    $sql=$kind==='spell'?"SELECT a.id,a.name,a.visibility_level_id FROM actions a JOIN action_categories ac ON ac.id=a.action_category_id WHERE a.id=? AND a.is_custom=1 AND ac.code='spell'":"SELECT id,name,visibility_level_id FROM {$m['table']} WHERE id=? AND is_custom=1";
+    $st=$db->prepare($sql);$st->execute([$id]);$record=$st->fetch(); if(!$record) throw new RuntimeException('Solo puedes adjuntar imagen a registros custom existentes.');
+    if(!isset($_FILES['image'])) throw new RuntimeException('Selecciona una imagen.');
+    $f=$_FILES['image']; if($f['error']!==UPLOAD_ERR_OK) throw new RuntimeException('No se pudo recibir la imagen.');
+    if((int)$f['size']>15*1024*1024) throw new RuntimeException('La imagen supera el límite permitido de 15 MB.');
+    $info=getimagesize($f['tmp_name']); $allowed=['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp']; if(!$info||!isset($allowed[$info['mime']])) throw new RuntimeException('Formato no admitido. Usa JPEG, PNG o WebP.');
+    $relDir='codex/custom/'.$m['entity']; $dir=dirname(__DIR__).'/storage/uploads/'.$relDir; if(!is_dir($dir)) mkdir($dir,0770,true);
+    $name=bin2hex(random_bytes(24)).'.'.$allowed[$info['mime']]; if(!move_uploaded_file($f['tmp_name'],$dir.'/'.$name)) throw new RuntimeException('No se pudo guardar la imagen.');
+    $storagePath=$relDir.'/'.$name; $driver=(int)$db->query("SELECT id FROM media_storage_drivers WHERE code='local'")->fetchColumn(); $purposeSt=$db->prepare('SELECT id FROM media_purposes WHERE code=?');$purposeSt->execute([$m['purpose']]);$purpose=(int)$purposeSt->fetchColumn();
+    $db->prepare('INSERT INTO media_assets(storage_driver_id,owner_user_id,original_filename,title,alt_text,storage_path,mime_type,width_px,height_px,size_bytes,sha256,is_private,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)')->execute([$driver,$user['id'],$f['name'],$record['name'],$record['name'],$storagePath,$info['mime'],$info[0],$info[1],$f['size'],hash_file('sha256',$dir.'/'.$name),1]);
+    $mediaId=(int)$db->lastInsertId();
+    $db->prepare('INSERT INTO codex_media_links(media_asset_id,entity_type,entity_id,media_purpose_id,visibility_level_id,title,is_primary) VALUES (?,?,?,?,?,?,1) ON DUPLICATE KEY UPDATE is_primary=VALUES(is_primary),title=VALUES(title)')->execute([$mediaId,$m['entity'],$id,$purpose,$record['visibility_level_id'],$record['name']]);
+    return ['id'=>$mediaId,'url'=>'/api/codex/media/'.$mediaId];
 }
 function uploadAsset(PDO $db,array $user): array {
     if(!isset($_FILES['image'])) {
