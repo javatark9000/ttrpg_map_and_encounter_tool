@@ -3,9 +3,9 @@ declare(strict_types=1);
 
 require dirname(__DIR__).'/src/bootstrap.php';
 
-use Dnd\Auth;
-use Dnd\Database;
-use Dnd\GameService;
+use Ttrpg\Auth;
+use Ttrpg\Database;
+use Ttrpg\GameService;
 
 $tests=0;$db=Database::connection();$game=new GameService($db);$suffix=bin2hex(random_bytes(4));$userIds=[];$scenarioId=0;
 function ok(bool $condition,string $message): void {global $tests;$tests++;if(!$condition)throw new RuntimeException("FALLÓ: $message");echo "✓ $message\n";}

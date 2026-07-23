@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace Dnd;
+namespace Ttrpg;
 
 use RuntimeException;
 use Workerman\Connection\TcpConnection;

@@ -1,6 +1,6 @@
-# D&D Manager
+# TTRPG Manager
 
-Aplicación web responsive para administrar mapas, jugadores y encounters de una mesa de Dungeons & Dragons. Usa PHP, MariaDB, JavaScript, Canvas HTML5 y WebSocket.
+Aplicación web responsive para administrar mapas, jugadores y encuentros de juegos de rol de mesa. Usa PHP, MariaDB, JavaScript, Canvas HTML5 y WebSocket.
 
 ## Funcionalidad implementada
 
@@ -30,14 +30,21 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta `database/schema.sql`. Si se cambia el esquema durante desarrollo, recrear la base:
-
-```bash
-docker compose down -v
-docker compose up -d mariadb
-```
+Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta `database/schema.sql`; el servicio `db-migrate` aplica una sola vez todos los archivos de `database/migrations/` y registra el resultado en `schema_migrations`.
 
 Cambiar obligatoriamente `DM_INVITE_CODE` en `.env`.
+
+## Datos privados y media
+
+Los datos generados locales de `database/private/` y las imágenes de `storage/media/` no se incorporan a la imagen Docker. Para cargarlos en una base inicializada:
+
+```bash
+./bin/load-private-data.sh
+```
+
+El cargador ejecuta cada seed junto a su transformación, vuelve a aplicar las normalizaciones dependientes de datos y enlaza las imágenes mediante `rules_revision` y `srd_index`, sin depender de IDs autoincrementales. Los SQL privados se transmiten directamente a MariaDB y no quedan dentro de los contenedores.
+
+El servicio de una sola ejecución `media-init` copia los WebP usados por el códice desde `storage/media/codex/tokens/webp/` al volumen `uploads`, bajo `/app/storage/uploads/codex/tokens/webp/`. Los PNG de origen no se duplican porque la aplicación sirve las rutas WebP registradas en `media_assets`. Para forzar una recarga completa de media, eliminar del volumen el archivo `codex/tokens/webp/.seed-complete` y volver a ejecutar `docker compose up -d`.
 
 ## Ejecutar
 

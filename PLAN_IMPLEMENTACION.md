@@ -1,4 +1,4 @@
-# Plan de implementación — D&D Manager
+# Plan de implementación — TTRPG Manager
 
 ## 1. Alcance y principios
 

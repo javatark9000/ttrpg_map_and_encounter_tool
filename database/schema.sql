@@ -1,5 +1,5 @@
-CREATE DATABASE IF NOT EXISTS dnd_manager CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE dnd_manager;
+CREATE DATABASE IF NOT EXISTS ttrpg_manager CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE ttrpg_manager;
 
 CREATE TABLE users (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

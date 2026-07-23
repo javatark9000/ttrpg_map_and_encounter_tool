@@ -1,6 +1,6 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const state={user:null,data:null,bootstrap:null,scenarioId:null,ws:null,mode:'pan',camera:{x:30,y:30,z:1},path:[],paint:new Map(),drag:null,pointers:new Map(),images:new Map(),selectedCharacter:null,animations:new Map(),objectDraft:null,selectionDraft:null,selectedObjects:new Set(),selectedNpcs:new Set(),visibilityAnimations:new Map(),followCamera:null,viewPublishTimer:null};
-const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('dnd_csrf='))?.split('=')[1]||'';
+const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('ttrpg_csrf='))?.split('=')[1]||'';
 async function api(path,opt={}){const headers={...(opt.headers||{})};if(opt.body!==undefined&&!(opt.body instanceof FormData))headers['Content-Type']='application/json';if(opt.method&&opt.method!=='GET')headers['X-CSRF-Token']=csrf();const r=await fetch('/api'+path,{...opt,headers});const d=await r.json().catch(()=>({error:'Respuesta inválida'}));if(!r.ok)throw Error(d.error||'Error');return d}
 function toast(text){const e=$('#toast');e.textContent=text;e.classList.add('show');clearTimeout(e.t);e.t=setTimeout(()=>e.classList.remove('show'),2500)}
 function formData(form){return Object.fromEntries(new FormData(form))}

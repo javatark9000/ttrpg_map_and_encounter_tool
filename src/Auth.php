@@ -1,14 +1,14 @@
 <?php
 declare(strict_types=1);
 
-namespace Dnd;
+namespace Ttrpg;
 
 use PDO;
 use RuntimeException;
 
 final class Auth
 {
-    public const COOKIE = 'dnd_session';
+    public const COOKIE = 'ttrpg_session';
 
     public function __construct(private PDO $db) {}
 
@@ -34,7 +34,7 @@ final class Auth
 
     public function guest(): array
     {
-        $email='guest@dnd-manager.internal';
+        $email='guest@ttrpg-manager.internal';
         $stmt=$this->db->prepare('SELECT id FROM users WHERE email=? AND role=\'GUEST\' LIMIT 1');
         $stmt->execute([$email]);
         $userId=(int)$stmt->fetchColumn();

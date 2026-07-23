@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="es">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="theme-color" content="#17130f"><meta name="ws-url" content=""><title>D&D Manager</title><link rel="stylesheet" href="/assets/styles.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="theme-color" content="#17130f"><meta name="ws-url" content=""><title>TTRPG Manager</title><link rel="stylesheet" href="/assets/styles.css"></head>
 <body>
 <section id="auth" class="center-card">
-  <h1>⚔ D&D Manager</h1><p class="muted">Tu mesa, mapas y encuentros persistentes.</p>
+  <h1>⚔ TTRPG Manager</h1><p class="muted">Tu mesa, mapas y encuentros persistentes.</p>
   <div class="tabs"><button data-auth-tab="login" class="active">Entrar</button><button data-auth-tab="register">Crear cuenta</button></div>
   <form id="login-form"><label>Correo<input name="email" type="email" required autocomplete="email"></label><label>Contraseña<input name="password" type="password" required autocomplete="current-password"></label><button class="primary">Entrar</button></form>
   <div id="guest-access"><div class="auth-separator"><span>o</span></div><button type="button" id="guest-login">Entrar como invitado</button><p class="muted">No requiere crear una cuenta. La vista seguirá automáticamente al DM.</p></div>
@@ -12,7 +12,7 @@
 </section>
 
 <div id="app" hidden>
-<header><button id="menu-btn" aria-label="Menú">☰</button><strong>D&D Manager</strong><span id="connection" class="pill offline">offline</span><span class="grow"></span><span id="user-label"></span><button id="logout">Salir</button></header>
+<header><button id="menu-btn" aria-label="Menú">☰</button><strong>TTRPG Manager</strong><span id="connection" class="pill offline">offline</span><span class="grow"></span><span id="user-label"></span><button id="logout">Salir</button></header>
 <div class="layout">
 <aside id="sidebar">
   <section><h2>Escenarios</h2><div id="scenario-list"></div><button id="new-scenario" class="dm-only">＋ Nuevo escenario</button></section>
