@@ -73,19 +73,27 @@ Si se sirve con otro host/puerto, actualizar `APP_ORIGIN`. Para producción, mod
 
 ## Estructura
 
-- `public/`: router HTTP, interfaz y Canvas.
+- `public/index.php`: punto de entrada y tabla de rutas HTTP.
+- `public/assets/app.js`: sesión, escenarios, Canvas y encuentros.
+- `public/assets/js/`: estado y módulos enfocados de interfaz.
+- `src/Http/`: implementaciones HTTP de Codex, assets y utilidades comunes.
 - `src/Auth.php`: sesiones persistentes.
 - `src/GameService.php`: reglas y transacciones autoritativas.
 - `src/WebSocketServer.php`: autenticación, comandos y difusión.
 - `database/schema.sql`: esquema MariaDB.
 - `bin/websocket.php`: proceso WebSocket Workerman.
+- `docs/ARCHITECTURE.md`: mapa para localizar cada tipo de cambio.
 - `PLAN_IMPLEMENTACION.md`: planificación y decisiones del proyecto.
 
-## Validación
+## Desarrollo y validación
+
+Instalar las herramientas de formato una vez con `npm ci`. Prettier mantiene legibles los archivos PHP, JavaScript, HTML y CSS.
 
 ```bash
+npm run format:check
 composer test
 composer audit
 find src public bin tests -name '*.php' -print0 | xargs -0 -n1 php -l
 node --check public/assets/app.js
+find public/assets/js -name '*.js' -print0 | xargs -0 -n1 node --check
 ```

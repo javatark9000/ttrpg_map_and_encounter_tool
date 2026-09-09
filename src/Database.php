@@ -11,8 +11,12 @@ final class Database
 
     public static function connection(): PDO
     {
-        if (self::$pdo) return self::$pdo;
-        $dsn = $_ENV['DB_DSN'] ?? 'mysql:host=127.0.0.1;port=3306;dbname=ttrpg_manager;charset=utf8mb4';
+        if (self::$pdo) {
+            return self::$pdo;
+        }
+        $dsn =
+            $_ENV['DB_DSN'] ??
+            'mysql:host=127.0.0.1;port=3306;dbname=ttrpg_manager;charset=utf8mb4';
         self::$pdo = new PDO($dsn, $_ENV['DB_USER'] ?? 'ttrpg', $_ENV['DB_PASSWORD'] ?? 'ttrpg', [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -30,7 +34,9 @@ final class Database
             $db->commit();
             return $result;
         } catch (\Throwable $e) {
-            if ($db->inTransaction()) $db->rollBack();
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
             throw $e;
         }
     }

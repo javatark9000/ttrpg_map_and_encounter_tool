@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "format": "prettier --write public src bin tests",
+    "format:check": "prettier --check public src bin tests"
+  },
+  "devDependencies": {
+    "@prettier/plugin-php": "0.24.0",
+    "prettier": "3.5.3"
+  }
+}
