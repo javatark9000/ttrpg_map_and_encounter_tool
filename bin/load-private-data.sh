@@ -3,7 +3,6 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PRIVATE_DIR="$ROOT/database/private"
-MIGRATIONS_DIR="$ROOT/database/migrations"
 
 if [ ! -d "$PRIVATE_DIR" ]; then
     echo "No existe $PRIVATE_DIR" >&2
@@ -53,13 +52,8 @@ run_sql "$PRIVATE_DIR/seed_spells.private.sql"
 run_pair seed_staging_srd_monsters_2014.private.sql transform_srd_monsters_2014_to_codex.private.sql
 run_pair seed_staging_srd_monsters_2024.private.sql transform_srd_monsters_2024_to_codex.private.sql
 
-# Reapply data-normalization migrations after importing generated records.
-for migration in "$MIGRATIONS_DIR"/*.sql; do
-    number=$(basename "$migration" | cut -d_ -f1)
-    if [ "$number" -ge 23 ] 2>/dev/null; then
-        run_sql "$migration"
-    fi
-done
+# Apply corrections that depend on records and staging tables created above.
+run_sql "$ROOT/database/post_import_normalization.sql"
 
 # The old generated media SQL hard-codes creature IDs. Resolve links by SRD revision/index instead.
 echo '[media] Enlazando el manifiesto con las criaturas importadas'

@@ -1,126 +1,131 @@
 name: ttrpg-manager
 
 services:
-  mariadb:
-    image: mariadb:11.4
-    restart: unless-stopped
-    environment:
-      MARIADB_DATABASE: ttrpg_manager
-      MARIADB_USER: ttrpg
-      MARIADB_PASSWORD: ${DB_PASSWORD:-ttrpg}
-      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mariadb_data:/var/lib/mysql
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+    mariadb:
+        image: mariadb:11.4
+        restart: unless-stopped
+        environment:
+            MARIADB_DATABASE: ttrpg_manager
+            MARIADB_USER: ttrpg
+            MARIADB_PASSWORD: ${DB_PASSWORD:-ttrpg}
+            MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+        ports:
+            - '3306:3306'
+        volumes:
+            - mariadb_data:/var/lib/mysql
+            - ./database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+        healthcheck:
+            test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+            interval: 5s
+            timeout: 5s
+            retries: 20
 
-  db-migrate:
-    image: mariadb:11.4
-    restart: "no"
-    environment:
-      MARIADB_DATABASE: ttrpg_manager
-      MARIADB_USER: ttrpg
-      MARIADB_PASSWORD: ${DB_PASSWORD:-ttrpg}
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        client='mariadb --default-character-set=utf8mb4 -h mariadb -u'"$$MARIADB_USER"' -p'"$$MARIADB_PASSWORD"' '"$$MARIADB_DATABASE"
-        $$client -e 'CREATE TABLE IF NOT EXISTS schema_migrations (filename VARCHAR(255) PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)'
-        for file in /migrations/*.sql; do
-          name=$${file##*/}
-          applied=$$($$client -Nse "SELECT COUNT(*) FROM schema_migrations WHERE filename='$$name'")
-          if [ "$$applied" = 0 ]; then
-            echo "Applying $$name"
-            sed 's/USE dnd_manager;/USE ttrpg_manager;/g' "$$file" | $$client
-            $$client -e "INSERT INTO schema_migrations(filename) VALUES ('$$name')"
-          fi
-        done
-    volumes:
-      - ./database/migrations:/migrations:ro
-    depends_on:
-      mariadb:
-        condition: service_healthy
+    db-migrate:
+        image: mariadb:11.4
+        restart: 'no'
+        environment:
+            MARIADB_DATABASE: ttrpg_manager
+            MARIADB_USER: ttrpg
+            MARIADB_PASSWORD: ${DB_PASSWORD:-ttrpg}
+        command:
+            - /bin/sh
+            - -ec
+            - |
+                client='mariadb --default-character-set=utf8mb4 -h mariadb -u'"$$MARIADB_USER"' -p'"$$MARIADB_PASSWORD"' '"$$MARIADB_DATABASE"
+                $$client -e 'CREATE TABLE IF NOT EXISTS schema_migrations (filename VARCHAR(255) PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)'
+                for file in /migrations/*.sql; do
+                  [ -f "$$file" ] || continue
+                  name=$${file##*/}
+                  applied=$$($$client -Nse "SELECT COUNT(*) FROM schema_migrations WHERE filename='$$name'")
+                  if [ "$$applied" = 0 ]; then
+                    echo "Applying $$name"
+                    sed 's/USE dnd_manager;/USE ttrpg_manager;/g' "$$file" | $$client
+                    $$client -e "INSERT INTO schema_migrations(filename) VALUES ('$$name')"
+                  fi
+                done
+        volumes:
+            - ./database/migrations:/migrations:ro
+        depends_on:
+            mariadb:
+                condition: service_healthy
 
-  media-init:
-    image: alpine:3.21
-    restart: "no"
-    user: "0:0"
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        target=/target/codex/tokens/webp
-        marker="$$target/.seed-complete"
-        mkdir -p "$$target"
-        if [ ! -f "$$marker" ]; then
-          cp -a /source/. "$$target/"
-          touch "$$marker"
-        fi
-        chown -R 82:82 /target
-    volumes:
-      - ./storage/media/codex/tokens/webp:/source:ro
-      - uploads:/target
+    media-init:
+        image: alpine:3.21
+        restart: 'no'
+        user: '0:0'
+        command:
+            - /bin/sh
+            - -ec
+            - |
+                target=/target/codex/tokens/webp
+                marker="$$target/.seed-complete"
+                mkdir -p "$$target"
+                if [ ! -f "$$marker" ]; then
+                  cp -a /source/. "$$target/"
+                  touch "$$marker"
+                fi
+                chown -R 82:82 /target
+        volumes:
+            - ./storage/media/codex/tokens/webp:/source:ro
+            - uploads:/target
 
-  app:
-    build: .
-    restart: unless-stopped
-    environment: &app_environment
-      APP_TIMEZONE: ${APP_TIMEZONE:-America/Santo_Domingo}
-      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
-      DB_DSN: mysql:host=mariadb;port=3306;dbname=ttrpg_manager;charset=utf8mb4
-      DB_USER: ttrpg
-      DB_PASSWORD: ${DB_PASSWORD:-ttrpg}
-      DM_INVITE_CODE: ${DM_INVITE_CODE:-cambia-este-codigo}
-      WS_HOST: 0.0.0.0
-      WS_PORT: 8081
-    command: ["php", "-S", "0.0.0.0:8080", "-t", "public", "public/index.php"]
-    ports:
-      - "8080:8080"
-    volumes:
-      - uploads:/app/storage/uploads
-      - ./storage/media:/app/storage/media:ro
-      - ./database/migrations:/app/database/migrations:ro
-      - ./database/private:/app/database/private:ro
-    depends_on:
-      mariadb:
-        condition: service_healthy
-      db-migrate:
-        condition: service_completed_successfully
-      media-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "php", "-r", "$$s=fsockopen('127.0.0.1',8080); if(!$$s) exit(1); fclose($$s);"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    app:
+        build: .
+        restart: unless-stopped
+        environment: &app_environment
+            APP_TIMEZONE: ${APP_TIMEZONE:-America/Santo_Domingo}
+            APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+            DB_DSN: mysql:host=mariadb;port=3306;dbname=ttrpg_manager;charset=utf8mb4
+            DB_USER: ttrpg
+            DB_PASSWORD: ${DB_PASSWORD:-ttrpg}
+            DM_INVITE_CODE: ${DM_INVITE_CODE:-cambia-este-codigo}
+            WS_HOST: 0.0.0.0
+            WS_PORT: 8081
+        command: ['php', '-S', '0.0.0.0:8080', '-t', 'public', 'public/index.php']
+        ports:
+            - '8080:8080'
+        volumes:
+            - uploads:/app/storage/uploads
+            - ./storage/media:/app/storage/media:ro
+            - ./database/private:/app/database/private:ro
+        depends_on:
+            mariadb:
+                condition: service_healthy
+            db-migrate:
+                condition: service_completed_successfully
+            media-init:
+                condition: service_completed_successfully
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'php',
+                    '-r',
+                    "$$s=fsockopen('127.0.0.1',8080); if(!$$s) exit(1); fclose($$s);",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 10
 
-  websocket:
-    build: .
-    restart: unless-stopped
-    environment: *app_environment
-    command: ["php", "bin/websocket.php", "start"]
-    ports:
-      - "8081:8081"
-    volumes:
-      - uploads:/app/storage/uploads
-      - ./storage/media:/app/storage/media:ro
-      - ./database/migrations:/app/database/migrations:ro
-      - ./database/private:/app/database/private:ro
-    depends_on:
-      mariadb:
-        condition: service_healthy
-      db-migrate:
-        condition: service_completed_successfully
-      media-init:
-        condition: service_completed_successfully
+    websocket:
+        build: .
+        restart: unless-stopped
+        environment: *app_environment
+        command: ['php', 'bin/websocket.php', 'start']
+        ports:
+            - '8081:8081'
+        volumes:
+            - uploads:/app/storage/uploads
+            - ./storage/media:/app/storage/media:ro
+            - ./database/private:/app/database/private:ro
+        depends_on:
+            mariadb:
+                condition: service_healthy
+            db-migrate:
+                condition: service_completed_successfully
+            media-init:
+                condition: service_completed_successfully
 
 volumes:
-  mariadb_data:
-  uploads:
+    mariadb_data:
+    uploads:

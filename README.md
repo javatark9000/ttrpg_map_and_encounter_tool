@@ -30,9 +30,16 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta `database/schema.sql`; el servicio `db-migrate` aplica una sola vez todos los archivos de `database/migrations/` y registra el resultado en `schema_migrations`.
+Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta el esquema consolidado `database/schema.sql`. El servicio `db-migrate` queda disponible únicamente para migraciones futuras y registra su ejecución en `schema_migrations`.
 
-Cambiar obligatoriamente `DM_INVITE_CODE` en `.env`.
+Para reconstruir exclusivamente el entorno de pruebas desde cero:
+
+```bash
+docker compose down -v
+docker compose up -d --build
+```
+
+El primer comando elimina los volúmenes y sus datos; no debe ejecutarse sobre producción. Cambiar obligatoriamente `DM_INVITE_CODE` en `.env`.
 
 ## Datos privados y media
 

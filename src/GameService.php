@@ -52,7 +52,6 @@ final class GameService
         if ($user['role'] !== 'DM' && !(bool) $s['active']) {
             throw new RuntimeException('El escenario no está activo.');
         }
-        $this->ensureMapFocusTable();
         $mapFocus =
             $this->one(
                 'SELECT x,y,width_cells,height_cells FROM scenario_map_focus WHERE scenario_id=?',
@@ -71,7 +70,6 @@ final class GameService
             $npcSql .= ' AND n.visible=1 AND NOT(n.health<=0 OR n.dead_hidden=1)';
         }
         $npcs = $this->all($npcSql, [$scenarioId]);
-        $this->ensurePlayerCharacterDrawingColorColumn();
         $players = $this->all(
             'SELECT sp.*,u.name user_name,pc.name,pc.max_health,pc.drawing_color,pc.avatar_asset_id image_asset_id,a.path image_path,dpn.notes dm_notes FROM scenario_players sp JOIN users u ON u.id=sp.user_id JOIN player_characters pc ON pc.id=sp.character_id LEFT JOIN assets a ON a.id=pc.avatar_asset_id LEFT JOIN dm_player_notes dpn ON dpn.player_id=sp.user_id AND dpn.campaign_id=pc.campaign_id WHERE sp.scenario_id=?' .
                 ($user['role'] === 'DM' ? '' : ' AND sp.placed=1'),
@@ -168,7 +166,6 @@ final class GameService
             throw new RuntimeException('Escenario inexistente.');
         }
         $this->assertMember((int) $s['campaign_id'], (int) $user['id']);
-        $this->ensureEncounterHealthLogTable();
         $enc = $this->one('SELECT id FROM encounters WHERE scenario_id=?', [$scenarioId]);
         if (!$enc) {
             return '';
@@ -214,7 +211,6 @@ final class GameService
         }
         $cid = (int) $s['campaign_id'];
         $this->assertMember($cid, (int) $user['id']);
-        $this->ensureChatTables();
         if ($user['role'] === 'PLAYER') {
             $this->ensurePlayerChat($cid, (int) $user['id']);
         }
@@ -231,7 +227,6 @@ final class GameService
     }
     public function chatMessages(int $chatId, array $user): array
     {
-        $this->ensureChatTables();
         $chat = $this->one('SELECT * FROM dm_player_chats WHERE id=?', [$chatId]);
         if (!$chat) {
             throw new RuntimeException('Chat inexistente.');
@@ -270,7 +265,6 @@ final class GameService
         }
         $cid = (int) $s['campaign_id'];
         $this->assertMember($cid, (int) $user['id']);
-        $this->ensureChatTables();
         if ($user['role'] === 'DM') {
             $chatId = (int) ($p['chatId'] ?? 0);
             $chat = $this->one('SELECT * FROM dm_player_chats WHERE id=? AND campaign_id=?', [
@@ -1366,7 +1360,6 @@ final class GameService
             ->execute([$sid]);
         $enc = $this->one('SELECT id FROM encounters WHERE scenario_id=?', [$sid]);
         if ($enc) {
-            $this->ensureEncounterHealthLogTable();
             $this->db
                 ->prepare('DELETE FROM encounter_health_log WHERE encounter_id=?')
                 ->execute([$enc['id']]);
@@ -1899,23 +1892,8 @@ final class GameService
             ->execute([$eid, $kind, $id, $row['initiative'], $state]);
     }
 
-    // Compatibility helpers for installations that have not run every migration yet.
-    private function ensurePlayerCharacterDrawingColorColumn(): void
-    {
-        $this->db->exec(
-            "ALTER TABLE player_characters ADD COLUMN IF NOT EXISTS drawing_color VARCHAR(20) NOT NULL DEFAULT '#ffffff' AFTER avatar_asset_id",
-        );
-    }
-
-    private function ensureMapFocusTable(): void
-    {
-        $this->db->exec(
-            'CREATE TABLE IF NOT EXISTS scenario_map_focus (scenario_id BIGINT UNSIGNED PRIMARY KEY, x INT UNSIGNED NOT NULL, y INT UNSIGNED NOT NULL, width_cells INT UNSIGNED NOT NULL, height_cells INT UNSIGNED NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB',
-        );
-    }
     private function setMapFocus(array $s, array $p): array
     {
-        $this->ensureMapFocusTable();
         $x = max(0, (int) ($p['x'] ?? 0));
         $y = max(0, (int) ($p['y'] ?? 0));
         $w = max(1, (int) ($p['widthCells'] ?? 1));
@@ -1938,22 +1916,12 @@ final class GameService
     }
     private function clearMapFocus(array $s): array
     {
-        $this->ensureMapFocusTable();
         $this->db
             ->prepare('DELETE FROM scenario_map_focus WHERE scenario_id=?')
             ->execute([$s['id']]);
         return ['cleared' => true];
     }
 
-    private function ensureChatTables(): void
-    {
-        $this->db->exec(
-            'CREATE TABLE IF NOT EXISTS dm_player_chats (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, campaign_id BIGINT UNSIGNED NOT NULL, player_id BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE(campaign_id,player_id), INDEX(campaign_id,updated_at)) ENGINE=InnoDB',
-        );
-        $this->db->exec(
-            'CREATE TABLE IF NOT EXISTS dm_player_chat_messages (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, chat_id BIGINT UNSIGNED NOT NULL, sender_id BIGINT UNSIGNED NOT NULL, message TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, read_by_dm BOOLEAN NOT NULL DEFAULT FALSE, read_by_player BOOLEAN NOT NULL DEFAULT FALSE, INDEX(chat_id,id), INDEX(sender_id,created_at)) ENGINE=InnoDB',
-        );
-    }
     private function ensurePlayerChat(int $campaignId, int $playerId): array
     {
         $this->db
@@ -1969,15 +1937,8 @@ final class GameService
         return $chat;
     }
 
-    private function ensureEncounterHealthLogTable(): void
-    {
-        $this->db->exec(
-            "CREATE TABLE IF NOT EXISTS encounter_health_log (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, encounter_id BIGINT UNSIGNED NOT NULL, round_no INT UNSIGNED NOT NULL DEFAULT 0, actor_type ENUM('PLAYER','NPC') NOT NULL, actor_id BIGINT UNSIGNED NOT NULL, actor_name VARCHAR(120) NOT NULL, action_type ENUM('DAMAGE','HEAL') NOT NULL, amount INT NOT NULL, health_before INT NOT NULL, health_after INT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX(encounter_id,id), INDEX(encounter_id,actor_type,actor_id)) ENGINE=InnoDB",
-        );
-    }
     private function hasEncounterHealthLog(int $encounterId): bool
     {
-        $this->ensureEncounterHealthLogTable();
         return (bool) $this->one(
             'SELECT 1 FROM encounter_health_log WHERE encounter_id=? LIMIT 1',
             [$encounterId],
@@ -2003,7 +1964,6 @@ final class GameService
         }
         $amount = abs($after - $before);
         $action = $after < $before ? 'DAMAGE' : 'HEAL';
-        $this->ensureEncounterHealthLogTable();
         $this->db
             ->prepare(
                 'INSERT INTO encounter_health_log(encounter_id,round_no,actor_type,actor_id,actor_name,action_type,amount,health_before,health_after) VALUES (?,?,?,?,?,?,?,?,?)',
