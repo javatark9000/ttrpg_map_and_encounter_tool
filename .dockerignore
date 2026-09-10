@@ -12,6 +12,9 @@ scripts/private/
 storage/cache/
 storage/media/
 storage/uploads/*
+exports/
+**/legacy_documentation/
+*.pdf
 !storage/uploads/.gitkeep
 translation-key.json
 *.private.sql

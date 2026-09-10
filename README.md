@@ -30,7 +30,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta el esquema consolidado `database/schema.sql`. El servicio `db-migrate` queda disponible únicamente para migraciones futuras y registra su ejecución en `schema_migrations`.
+Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta `database/schema.sql`, carga los datasets adicionales de `database/private/` y enlaza las imágenes de `storage/media/`. El servicio `db-migrate` queda disponible únicamente para migraciones futuras y registra su ejecución en `schema_migrations`.
 
 Para reconstruir exclusivamente el entorno de pruebas desde cero:
 
@@ -43,15 +43,15 @@ El primer comando elimina los volúmenes y sus datos; no debe ejecutarse sobre p
 
 ## Datos privados y media
 
-Los datos generados locales de `database/private/` y las imágenes de `storage/media/` no se incorporan a la imagen Docker. Para cargarlos en una base inicializada:
+Los datos locales no se incorporan a la imagen: Docker los monta en modo lectura desde `database/` y `storage/media/`. Durante el arranque:
 
-```bash
-./bin/load-private-data.sh
-```
+1. `codex-data-init` ejecuta cada seed junto a su transformación y aplica `database/post_import_normalization.sql`.
+2. `media-init` copia los WebP de `storage/media/codex/tokens/webp/` al volumen `uploads`.
+3. `codex-media-init` registra y enlaza las imágenes mediante `rules_revision` y `srd_index`, sin depender de IDs autoincrementales.
 
-El cargador ejecuta cada seed junto a su transformación, vuelve a aplicar las normalizaciones dependientes de datos y enlaza las imágenes mediante `rules_revision` y `srd_index`, sin depender de IDs autoincrementales. Los SQL privados se transmiten directamente a MariaDB y no quedan dentro de los contenedores.
+La tabla `data_imports` evita volver a cargar el mismo dataset en cada arranque. Si cambia el contenido de los seeds, incrementa `IMPORT_NAME` en `docker-compose.yml`. `./bin/load-private-data.sh` queda como acceso directo para construir e iniciar todo el conjunto de servicios.
 
-El servicio de una sola ejecución `media-init` copia los WebP usados por el códice desde `storage/media/codex/tokens/webp/` al volumen `uploads`, bajo `/app/storage/uploads/codex/tokens/webp/`. Los PNG de origen no se duplican porque la aplicación sirve las rutas WebP registradas en `media_assets`. Para forzar una recarga completa de media, eliminar del volumen el archivo `codex/tokens/webp/.seed-complete` y volver a ejecutar `docker compose up -d`.
+Los PNG de origen no se duplican porque la aplicación usa las rutas WebP registradas en `media_assets`. Para forzar una recarga completa de imágenes, elimina del volumen el archivo `codex/tokens/webp/.seed-complete` y recrea `media-init` y `codex-media-init`.
 
 ## Ejecutar
 

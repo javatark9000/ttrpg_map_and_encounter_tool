@@ -36,7 +36,7 @@ function uploadAsset(PDO $db, array $user): array
         throw new RuntimeException('Formato no admitido. Usa JPEG, PNG o WebP.');
     }
     $name = bin2hex(random_bytes(24)) . '.' . $allowed[$info['mime']];
-    $dir = dirname(__DIR__) . '/storage/uploads';
+    $dir = dirname(__DIR__, 2) . '/storage/uploads';
     if (!is_dir($dir)) {
         mkdir($dir, 0770, true);
     }
@@ -89,7 +89,7 @@ function serveAsset(PDO $db, int $id, array $user): never
     if (!$allowed) {
         throw new HttpError('Sin acceso a esta imagen.', 403);
     }
-    $file = dirname(__DIR__) . '/storage/uploads/' . $a['path'];
+    $file = dirname(__DIR__, 2) . '/storage/uploads/' . $a['path'];
     if (!is_file($file)) {
         throw new HttpError('Archivo inexistente.', 404);
     }

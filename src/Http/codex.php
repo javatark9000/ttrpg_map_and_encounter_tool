@@ -465,7 +465,7 @@ function serveCodexMedia(PDO $db, int $id, array $user): never
         throw new HttpError('Sin acceso a este media.', 403);
     }
     if ($a['storage_path']) {
-        $base = realpath(dirname(__DIR__) . '/storage/uploads');
+        $base = realpath(dirname(__DIR__, 2) . '/storage/uploads');
         $file = realpath($base . '/' . str_replace(['..', '\\'], ['', '/'], $a['storage_path']));
         if (!$base || !$file || !str_starts_with($file, $base) || !is_file($file)) {
             throw new HttpError('Archivo inexistente.', 404);
@@ -966,7 +966,7 @@ function uploadCustomCodexMedia(PDO $db, array $user): array
         throw new RuntimeException('Formato no admitido. Usa JPEG, PNG o WebP.');
     }
     $relDir = 'codex/custom/' . $m['entity'];
-    $dir = dirname(__DIR__) . '/storage/uploads/' . $relDir;
+    $dir = dirname(__DIR__, 2) . '/storage/uploads/' . $relDir;
     if (!is_dir($dir)) {
         mkdir($dir, 0770, true);
     }

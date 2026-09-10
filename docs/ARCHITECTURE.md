@@ -31,7 +31,7 @@ MariaDB y `GameService` son autoritativos. El navegador nunca debe decidir por s
 | Estructura visual                     | `public/app.html`                                          | `public/assets/styles.css`                                         |
 | Estilos                               | `public/assets/styles.css`                                 | `public/app.html` y el módulo que genere la clase afectada         |
 | Esquema nuevo                         | nueva migración y `database/schema.sql`                    | código que use la tabla o columna                                  |
-| Datos privados/SRD                    | `bin/load-private-data.sh`, `bin/import-private-media.php` | solo cuando la tarea lo requiera                                   |
+| Datos privados/SRD                    | `bin/init-database-data.sh`, `bin/import-private-media.php` | servicios `codex-data-init`, `media-init` y `codex-media-init`     |
 | Despliegue                            | `Dockerfile`, `docker-compose.yml`, `.env.example`         | `README.md`                                                        |
 
 ## HTTP
