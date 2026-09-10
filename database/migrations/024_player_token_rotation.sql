@@ -1,2 +1,0 @@
-ALTER TABLE scenario_players
-  ADD COLUMN IF NOT EXISTS rotation_degrees SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER token_color;

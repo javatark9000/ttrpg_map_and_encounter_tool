@@ -1,2 +1,0 @@
-ALTER TABLE npc_characters
-  ADD COLUMN IF NOT EXISTS rotation_degrees SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER armor_class;
