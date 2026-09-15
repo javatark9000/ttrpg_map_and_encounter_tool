@@ -1623,8 +1623,12 @@ canvas.addEventListener(
   { passive: false },
 );
 canvas.onpointerdown = (e) => {
-  const forcePan = e.button === 1;
-  if (forcePan) e.preventDefault();
+  const forcePan = e.button === 1,
+    forceSelect =
+      state.user.role === 'DM' && e.pointerType === 'mouse' && e.button === 0 && e.altKey,
+    mode = forceSelect ? 'select' : state.mode;
+  if (forcePan || forceSelect) e.preventDefault();
+  if (forceSelect) state.lastTap = null;
   canvas.setPointerCapture(e.pointerId);
   state.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
   if (state.pointers.size === 1) {
@@ -1635,21 +1639,18 @@ canvas.onpointerdown = (e) => {
       cy: state.camera.y,
       moved: false,
       forcePan,
+      forceSelect,
     };
-    if (!forcePan && state.mode === 'draw') {
+    if (!forcePan && mode === 'draw') {
       startDrawStroke(e.offsetX, e.offsetY);
       draw();
-    } else if (!forcePan && state.mode === 'object') {
+    } else if (!forcePan && mode === 'object') {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.objectDraft = { start: cell, current: cell };
         draw();
       }
-    } else if (
-      !forcePan &&
-      ['select', 'mapfocus'].includes(state.mode) &&
-      state.user.role === 'DM'
-    ) {
+    } else if (!forcePan && ['select', 'mapfocus'].includes(mode) && state.user.role === 'DM') {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.selectionDraft = { start: cell, current: cell };
@@ -1658,7 +1659,7 @@ canvas.onpointerdown = (e) => {
     }
   }
   if (forcePan) canvas.classList.add('grabbing');
-  if (!forcePan && ['block', 'unblock'].includes(state.mode)) paintAt(e.offsetX, e.offsetY);
+  if (!forcePan && ['block', 'unblock'].includes(mode)) paintAt(e.offsetX, e.offsetY);
 };
 canvas.addEventListener('auxclick', (e) => {
   if (e.button === 1) e.preventDefault();
@@ -1684,32 +1685,33 @@ canvas.onpointermove = (e) => {
     return;
   }
   if (state.drag) {
-    const dx = e.offsetX - state.drag.x,
+    const mode = state.drag.forceSelect ? 'select' : state.mode,
+      dx = e.offsetX - state.drag.x,
       dy = e.offsetY - state.drag.y;
     if (Math.hypot(dx, dy) > 5) state.drag.moved = true;
     const touchMapPan =
       e.pointerType === 'touch' && (['path', 'place'].includes(state.mode) || state.moveToken);
-    if (state.drag.forcePan || state.mode === 'pan' || touchMapPan) {
+    if (state.drag.forcePan || mode === 'pan' || touchMapPan) {
       if (state.user.role !== 'GUEST') {
         state.camera.x = state.drag.cx + dx;
         state.camera.y = state.drag.cy + dy;
         draw();
         publishDmView();
       }
-    } else if (state.mode === 'object' && state.objectDraft) {
+    } else if (mode === 'object' && state.objectDraft) {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.objectDraft.current = cell;
         draw();
       }
-    } else if (['select', 'mapfocus'].includes(state.mode) && state.selectionDraft) {
+    } else if (['select', 'mapfocus'].includes(mode) && state.selectionDraft) {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.selectionDraft.current = cell;
         draw();
       }
-    } else if (state.mode === 'draw' && state.drawStroke) addDrawPoint(e.offsetX, e.offsetY);
-    else if (['block', 'unblock'].includes(state.mode)) paintAt(e.offsetX, e.offsetY);
+    } else if (mode === 'draw' && state.drawStroke) addDrawPoint(e.offsetX, e.offsetY);
+    else if (['block', 'unblock'].includes(mode)) paintAt(e.offsetX, e.offsetY);
   }
 };
 function isTouchTap(e, drag) {
@@ -1721,9 +1723,11 @@ function isTouchTap(e, drag) {
 }
 canvas.onpointerup = (e) => {
   const was = state.drag,
+    mode = was?.forceSelect ? 'select' : state.mode,
+    selectionOnly = !!was?.forceSelect,
     draft = state.objectDraft,
     selection = state.selectionDraft,
-    touchTap = was && isTouchTap(e, was) && ['place', 'path', 'npc'].includes(state.mode);
+    touchTap = was && isTouchTap(e, was) && ['place', 'path', 'npc'].includes(mode);
   state.pointers.delete(e.pointerId);
   if (state.pointers.size < 2) state.pinch = null;
   if (was?.multiTouch) {
@@ -1739,17 +1743,17 @@ canvas.onpointerup = (e) => {
     state.objectDraft = null;
     state.selectionDraft = null;
     draw();
-  } else if (state.mode === 'draw' && state.drawStroke) {
+  } else if (mode === 'draw' && state.drawStroke) {
     finishDrawStroke();
-  } else if (draft && state.mode === 'object') {
+  } else if (draft && mode === 'object') {
     const area = objectDraftArea();
     state.objectDraft = null;
     draw();
     if (area) void createObjectArea(area);
-  } else if (selection && ['select', 'mapfocus'].includes(state.mode)) {
+  } else if (selection && ['select', 'mapfocus'].includes(mode)) {
     const area = selectionDraftArea();
     state.selectionDraft = null;
-    if (state.mode === 'mapfocus') {
+    if (mode === 'mapfocus') {
       if (was?.moved && area)
         command('map.focus', {
           x: area.x,
@@ -1761,20 +1765,26 @@ canvas.onpointerup = (e) => {
     } else if (was?.moved && area) selectEntitiesInArea(area);
     else {
       draw();
-      tap(e.offsetX, e.offsetY, { additive: e.shiftKey || e.ctrlKey || e.metaKey });
+      tap(e.offsetX, e.offsetY, {
+        additive: selectionOnly || e.shiftKey || e.ctrlKey || e.metaKey,
+        selectionOnly,
+      });
     }
-  } else if (['block', 'unblock'].includes(state.mode) && state.paint.size) {
+  } else if (['block', 'unblock'].includes(mode) && state.paint.size) {
     command('map.cells.paint', {
       cells: [...state.paint.values()],
       blocked: state.mode === 'block',
     });
     state.paint.clear();
   } else if (was && (!was.moved || touchTap)) {
-    if (maybeDoubleTap(e, was)) {
+    if (!selectionOnly && maybeDoubleTap(e, was)) {
       if (!state.pointers.size) state.drag = null;
       return;
     }
-    tap(e.offsetX, e.offsetY, { additive: e.shiftKey || e.ctrlKey || e.metaKey });
+    tap(e.offsetX, e.offsetY, {
+      additive: selectionOnly || e.shiftKey || e.ctrlKey || e.metaKey,
+      selectionOnly,
+    });
   }
   if (!state.pointers.size) state.drag = null;
 };
@@ -1862,15 +1872,17 @@ function paintAt(x, y) {
   }
 }
 function tap(x, y, options = {}) {
-  const c = screenToCell(x, y);
+  const c = screenToCell(x, y),
+    selectionOnly = state.user.role === 'DM' && !!options.selectionOnly,
+    mode = selectionOnly ? 'select' : state.mode;
   if (!validCell(c)) return;
-  if (state.moveToken) {
+  if (!selectionOnly && state.moveToken) {
     const t = state.moveToken;
     state.moveToken = null;
     command('token.move_dm', { kind: t.kind, id: +t.id, ...c });
     return;
   }
-  if (state.cloneSource && state.user.role === 'DM' && state.mode === 'select') {
+  if (!selectionOnly && state.cloneSource && state.user.role === 'DM' && mode === 'select') {
     command('token.clone', { kind: state.cloneSource.kind, id: +state.cloneSource.id, ...c });
     return;
   }
@@ -1889,7 +1901,7 @@ function tap(x, y, options = {}) {
     }
     return;
   }
-  if (state.mode === 'path') {
+  if (mode === 'path') {
     const own = controlledPlayer();
     if (!own) {
       toast('Selecciona y coloca en el mapa el personaje que quieres mover');
@@ -1928,7 +1940,7 @@ function tap(x, y, options = {}) {
     draw();
     return;
   }
-  if (state.mode === 'place') {
+  if (mode === 'place') {
     void placeCharacterAt(c);
     return;
   }
@@ -1940,16 +1952,16 @@ function tap(x, y, options = {}) {
     else if (ownTokens.length > 1) showCellMenu(ownTokens, x, y);
     return;
   }
-  if (state.mode === 'npc') {
+  if (mode === 'npc') {
     void createNpcAt(c);
     return;
   }
-  if (state.mode === 'object') return;
+  if (mode === 'object') return;
   const tokens = tokensAtCell(c),
-    stickySelect = state.user.role === 'DM' && state.mode === 'select';
+    stickySelect = state.user.role === 'DM' && mode === 'select';
   if (tokens.length === 1) selectMapEntity(tokens[0], stickySelect || !!options.additive);
   else if (tokens.length > 1) showCellMenu(tokens, x, y, stickySelect || !!options.additive);
-  else if (state.user.role === 'DM' && state.mode === 'select') {
+  else if (state.user.role === 'DM' && mode === 'select' && !selectionOnly) {
     if (selectionCount()) {
       clearEntitySelection();
       return;
@@ -2721,3 +2733,9 @@ function participantName(p) {
   const x = state.data.npcs.find((v) => +v.id === +p.actor_id);
   return x?.name || 'NPC';
 }
+
+// Restore the cookie-backed session on every page load, after all handlers are installed.
+start().catch((error) => {
+  $('#auth-error').textContent = error.message;
+  toast(error.message);
+});
