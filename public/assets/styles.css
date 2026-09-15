@@ -146,6 +146,9 @@ header {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr) 270px;
 }
+.is-dm .layout {
+  grid-template-columns: 230px minmax(0, 1fr) 320px;
+}
 .is-guest .layout {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -173,6 +176,49 @@ aside {
   scrollbar-gutter: stable;
   border-right: 0;
   border-left: 1px solid var(--line);
+}
+#dm-panel-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem;
+  padding: 0.2rem 0 0.65rem;
+  background: var(--panel);
+}
+#dm-panel-tabs button {
+  min-width: 0;
+  padding: 0.55rem 0.3rem;
+  font-size: 0.88rem;
+}
+#dm-panel-tabs button.active {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #24180c;
+  font-weight: 700;
+}
+.tab-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+  margin-left: 0.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--danger);
+  color: white;
+  font-size: 0.72rem;
+}
+.dm-panel {
+  min-width: 0;
+}
+.panel-section {
+  padding: 0.35rem 0.15rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.panel-section > h2 {
+  margin-top: 0.35rem;
 }
 aside section {
   padding-bottom: 1rem;
@@ -229,7 +275,7 @@ aside section {
 }
 #inspector h2 {
   position: sticky;
-  top: 0;
+  top: 48px;
   z-index: 2;
   margin-top: 0;
   padding: 0.65rem 0;
@@ -432,18 +478,75 @@ main {
 #workspace {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 #toolbar {
+  position: relative;
+  z-index: 6;
   display: flex;
+  align-items: center;
   gap: 0.35rem;
   padding: 0.45rem;
-  overflow-x: auto;
+  overflow: visible;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
 #toolbar button {
   white-space: nowrap;
+}
+.player-toolbar,
+.dm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.player-toolbar {
+  overflow-x: auto;
+}
+.tool-group {
+  position: relative;
+}
+.tool-group summary {
+  display: block;
+  padding: 0.55rem 0.75rem;
+  white-space: nowrap;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.tool-group summary::-webkit-details-marker {
+  display: none;
+}
+.tool-group summary:hover,
+.tool-group[open] summary,
+.tool-group:has(button.active) summary {
+  border-color: var(--gold);
+  color: #ffe2a5;
+}
+.tool-group-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  gap: 0.3rem;
+  width: 220px;
+  padding: 0.45rem;
+  background: var(--panel);
+  border: 1px solid var(--gold);
+  border-radius: 9px;
+  box-shadow: 0 12px 35px #000c;
+}
+.tool-group-menu button {
+  width: 100%;
+  text-align: left;
+}
+.dm-primary-tool.active {
+  background: #49391f;
 }
 #map-wrap {
   position: relative;
@@ -456,6 +559,38 @@ main {
   width: 100%;
   height: 100%;
   touch-action: none;
+}
+#encounter-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  background: #100d0af5;
+  border-top: 1px solid var(--gold);
+  box-shadow: 0 -8px 24px #0007;
+}
+.encounter-bar-state {
+  display: grid;
+  min-width: 0;
+}
+.encounter-bar-state small {
+  color: var(--gold);
+  font-weight: 700;
+}
+.encounter-bar-state strong,
+.encounter-bar-state span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.encounter-bar-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+#turn-next {
+  min-width: 150px;
 }
 #map.grabbing {
   cursor: grabbing;
@@ -986,7 +1121,8 @@ legend {
   body {
     overflow: hidden;
   }
-  .layout {
+  .layout,
+  .is-dm .layout {
     grid-template-columns: 1fr;
   }
   #sidebar {
@@ -1005,7 +1141,7 @@ legend {
   }
   #right-panel {
     position: fixed;
-    z-index: 8;
+    z-index: 10;
     right: 0;
     bottom: 0;
     width: 100%;
@@ -1026,7 +1162,7 @@ legend {
     display: block;
     position: sticky;
     top: 0;
-    z-index: 4;
+    z-index: 6;
     width: 100%;
     padding: 0.25rem;
     margin: -0.15rem 0 0.2rem;
@@ -1042,9 +1178,74 @@ legend {
   .right-panel-collapsed #right-panel-toggle {
     transform: rotate(180deg);
   }
+  #dm-panel-tabs {
+    top: 34px;
+  }
   #inspector {
     max-height: none;
     min-height: 120px;
+  }
+  #inspector h2 {
+    top: 78px;
+  }
+  .is-dm #encounter-bar {
+    position: fixed;
+    z-index: 9;
+    right: 0;
+    bottom: 45vh;
+    left: 0;
+    padding-bottom: max(0.55rem, env(safe-area-inset-bottom));
+    transition: bottom 0.2s;
+  }
+  .is-dm.right-panel-collapsed #encounter-bar {
+    bottom: 42px;
+  }
+  .is-dm #zoom-in,
+  .is-dm #zoom-out,
+  .is-dm #toolbar > .grow {
+    display: none;
+  }
+  .dm-toolbar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    flex: 1;
+    width: 100%;
+  }
+  .dm-toolbar > button,
+  .tool-group summary {
+    width: 100%;
+    min-height: 44px;
+    overflow: hidden;
+    padding: 0.55rem 0.3rem;
+    font-size: 0.82rem;
+    text-align: center;
+    text-overflow: ellipsis;
+  }
+  .encounter-bar-state {
+    flex: 1;
+  }
+  #encounter-bar-health {
+    display: none;
+  }
+  #turn-rollback {
+    min-width: 44px;
+    width: 44px;
+    overflow: hidden;
+    padding-inline: 0;
+    font-size: 0;
+  }
+  #turn-rollback::after {
+    content: '←';
+    font-size: 1rem;
+  }
+  #turn-next {
+    min-width: 105px;
+    padding-inline: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .tool-group:nth-of-type(2) .tool-group-menu {
+    right: 0;
+    left: auto;
   }
   #menu-btn {
     display: block;

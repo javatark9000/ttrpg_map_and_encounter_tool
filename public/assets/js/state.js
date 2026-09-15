@@ -5,6 +5,7 @@ export const state = {
   scenarioId: null,
   ws: null,
   pendingTurn: null,
+  dmPanelTab: 'inspector',
   inspectorSaveTimer: null,
   mode: 'pan',
   camera: { x: 30, y: 30, z: 1 },

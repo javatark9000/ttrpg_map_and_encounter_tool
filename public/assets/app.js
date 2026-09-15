@@ -80,6 +80,8 @@ async function start() {
   $$('.dm-only').forEach((e) => (e.hidden = me.user.role !== 'DM'));
   $$('.player-only').forEach((e) => (e.hidden = me.user.role !== 'PLAYER'));
   $('#characters-panel').hidden = me.user.role !== 'PLAYER';
+  $('#encounter-bar').hidden = true;
+  if (me.user.role === 'DM') activateDmPanelTab(state.dmPanelTab);
   if (me.user.role === 'GUEST') {
     $('[data-mode="pan"]').hidden = true;
     $('#zoom-in').hidden = true;
@@ -217,6 +219,19 @@ $('#new-character').onclick = async () => {
 };
 $('#menu-btn').onclick = () => document.body.classList.toggle('menu-open');
 $('#right-panel-toggle').onclick = () => document.body.classList.toggle('right-panel-collapsed');
+
+function activateDmPanelTab(name, expand = false) {
+  if (state.user?.role !== 'DM') return;
+  state.dmPanelTab = name;
+  $$('[data-dm-panel-tab]').forEach((button) =>
+    button.classList.toggle('active', button.dataset.dmPanelTab === name),
+  );
+  $$('[data-dm-panel]').forEach((panel) => (panel.hidden = panel.dataset.dmPanel !== name));
+  if (expand) document.body.classList.remove('right-panel-collapsed');
+}
+$$('[data-dm-panel-tab]').forEach(
+  (button) => (button.onclick = () => activateDmPanelTab(button.dataset.dmPanelTab, true)),
+);
 
 // Realtime synchronization, chat, and encounter panels.
 function wsUrl() {
@@ -448,9 +463,8 @@ function notifyApp(title, body, onClick) {
   setTimeout(() => b.remove(), 9000);
 }
 function focusRequests() {
-  const p = $('#requests-panel');
-  p?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  p?.closest('details')?.setAttribute('open', '');
+  activateDmPanelTab('activity', true);
+  $('#requests-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 async function downloadEncounterLog() {
   if (!confirm('¿Quieres descargar el log del encuentro anterior?')) return;
@@ -493,6 +507,7 @@ function renderChatThreads() {
     target.append(b);
   }
   if (!state.chatThreads.length) target.innerHTML = '<p class="muted">Sin chats.</p>';
+  updateActivityBadge();
 }
 async function openChat(chatId, title = 'Chat') {
   const data = await api(`/chats/${chatId}/messages`);
@@ -605,6 +620,49 @@ function renderPlayerHp() {
       }),
   );
 }
+function updateActivityBadge() {
+  const badge = $('#activity-badge');
+  if (!badge || state.user?.role !== 'DM') return;
+  const pending = state.data?.pendingMovements?.length || 0;
+  const unread = state.chatThreads.reduce((total, thread) => total + (+thread.unread || 0), 0);
+  const total = pending + unread;
+  badge.textContent = String(total);
+  badge.hidden = total === 0;
+}
+
+function renderEncounterBar() {
+  const bar = $('#encounter-bar');
+  if (!bar || state.user?.role !== 'DM') return;
+  const encounter = state.data?.encounter;
+  const active = encounter && encounter.state !== 'OFF';
+  bar.hidden = !active;
+  if (!active) return;
+  $('#encounter-bar-round').textContent =
+    encounter.state === 'RUNNING'
+      ? `Ronda ${encounter.round_no || 0} · Turno ${encounter.turn_sequence || 0}`
+      : encounter.state;
+  const participant = state.data.participants.find(
+    (item) => +item.id === +encounter.current_participant_id,
+  );
+  const token = participant
+    ? participant.actor_type === 'PLAYER'
+      ? state.data.players.find((item) => +item.id === +participant.actor_id)
+      : state.data.npcs.find((item) => +item.id === +participant.actor_id)
+    : null;
+  $('#encounter-bar-current').textContent = token
+    ? token.name || token.user_name || participant.actor_type
+    : encounter.state === 'PREPARING'
+      ? 'Selecciona los participantes'
+      : 'Sin turno actual';
+  $('#encounter-bar-health').textContent =
+    token?.health === undefined
+      ? ''
+      : `${displayHp(token.health, { kind: participant.actor_type })} / ${token.max_health ?? token.health} PV`;
+  const running = encounter.state === 'RUNNING';
+  $('#turn-next').hidden = !running;
+  $('#turn-rollback').hidden = !running;
+}
+
 function renderRoundOrder() {
   const panel = $('#round-order-panel'),
     list = $('#round-order-list');
@@ -728,8 +786,10 @@ function renderDetails() {
   const d = state.data,
     s = d.scenario;
   $('#scenario-title').textContent = s.name;
-  $('#scenario-status').textContent =
-    `${s.width}×${s.height} · ${+s.active ? 'Activo' : 'Inactivo'}`;
+  $('#player-scenario-title').textContent = s.name;
+  const scenarioStatus = `${s.width}×${s.height} · ${+s.active ? 'Activo' : 'Inactivo'}`;
+  $('#scenario-status').textContent = scenarioStatus;
+  $('#player-scenario-status').textContent = scenarioStatus;
   $('#toggle-active').textContent = +s.active ? 'Desactivar' : 'Activar';
   $('#turn-info').textContent = d.encounter
     ? `${d.encounter.state} · Ronda ${d.encounter.round_no || 0}`
@@ -737,7 +797,14 @@ function renderDetails() {
   if ($('#encounter-log'))
     $('#encounter-log').hidden = !(state.user.role === 'DM' && d.previousEncounterLog);
   if (!state.encounterSelecting) $('#encounter-start').textContent = 'Iniciar combate';
+  const encounterState = d.encounter?.state || 'OFF';
+  $('#encounter-prepare').hidden = encounterState !== 'OFF';
+  $('#encounter-start').hidden = !['PREPARING', 'PAUSED'].includes(encounterState);
+  $('#restart-round').hidden = encounterState !== 'RUNNING';
+  $('#order-ties').hidden = encounterState === 'OFF';
+  $('#encounter-stop').hidden = encounterState === 'OFF';
   renderPlayerHp();
+  renderEncounterBar();
   renderRoundOrder();
   const req = $('#movement-requests');
   req.innerHTML = '';
@@ -765,6 +832,7 @@ function renderDetails() {
     };
     req.append(x);
   });
+  updateActivityBadge();
   if (selectionCount()) renderEntitySelection();
   else draw();
   updateTurnControls();
@@ -1538,12 +1606,19 @@ function setMode(m) {
 function setDrawingMode(on) {
   state.mode = on ? 'draw' : 'pan';
   state.drawStroke = null;
-  $$('[data-main-tool]').forEach((x) => (x.hidden = on));
+  $$('[data-main-tool]').forEach(
+    (x) =>
+      (x.hidden =
+        on ||
+        (x.classList.contains('dm-only') && state.user.role !== 'DM') ||
+        (x.classList.contains('player-only') && state.user.role !== 'PLAYER')),
+  );
   $$('[data-draw-tool]').forEach(
     (x) => (x.hidden = !on || (+x.classList.contains('dm-only') && state.user.role !== 'DM')),
   );
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', !on && x.dataset.mode === 'pan'));
   $('#draw-mode').classList.toggle('active', on);
+  $('#dm-draw-mode').classList.toggle('active', on);
   updateDrawButtons();
   if (!on) sendDraw({ op: 'clearUser' });
   draw();
@@ -1554,6 +1629,18 @@ function updateDrawButtons() {
   $('#draw-size-label').textContent = `Tamaño: ${state.drawSize}`;
 }
 $('#draw-mode').onclick = () => setDrawingMode(true);
+$('#dm-draw-mode').onclick = () => setDrawingMode(true);
+$$('.tool-group').forEach((group) => {
+  group.ontoggle = () => {
+    if (!group.open) return;
+    $$('.tool-group').forEach((other) => {
+      if (other !== group) other.open = false;
+    });
+  };
+  group
+    .querySelectorAll('button')
+    .forEach((button) => button.addEventListener('click', () => (group.open = false)));
+});
 $('#draw-exit').onclick = () => setDrawingMode(false);
 $('#draw-pen').onclick = () => {
   state.drawTool = 'pen';
@@ -2472,6 +2559,7 @@ function renderEntitySelection() {
       .filter(Boolean)
       .join(' y ');
   i.innerHTML = `<h2>Selección múltiple</h2><div class="token-card"><strong>${summary}</strong><p class="muted">${items.map((x) => esc(x.name)).join(', ')}</p><div class="row">${healable.length ? '<button id="bulk-heal" class="ok-action">Curar</button>' : ''}<button id="bulk-show">Hacer visibles</button><button id="bulk-hide">Ocultar</button><button id="bulk-image">Imagen común…</button><button id="bulk-delete" class="danger-action">Eliminar</button><button id="bulk-clear">Limpiar selección</button></div></div>`;
+  activateDmPanelTab('inspector', true);
   i.scrollTop = 0;
   if ($('#bulk-heal')) $('#bulk-heal').onclick = () => healTokens(healable);
   $('#bulk-show').onclick = () => command('tokens.bulk_update', { items: refs, visible: true });
@@ -2542,6 +2630,7 @@ function showCellMenu(tokens, x, y, additive = false) {
 }
 function inspect(t) {
   clearTimeout(state.inspectorSaveTimer);
+  if (state.user.role === 'DM') activateDmPanelTab('inspector', true);
   const i = $('#inspector'),
     encounterOn = state.data?.encounter && state.data.encounter.state !== 'OFF',
     combatOn = state.data?.encounter && state.data.encounter.state === 'RUNNING',
