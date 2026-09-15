@@ -177,15 +177,68 @@ aside {
   border-right: 0;
   border-left: 1px solid var(--line);
 }
-#dm-panel-tabs {
+#dm-panel-header {
   position: sticky;
   top: 0;
   z-index: 5;
+  padding: 0.1rem 0 0.65rem;
+  background: var(--panel);
+}
+#dm-scenario-menu {
+  position: relative;
+  margin-bottom: 0.5rem;
+}
+#dm-scenario-menu summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  overflow: hidden;
+  list-style: none;
+  cursor: pointer;
+  background: #100d0a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--gold);
+  font-weight: 700;
+}
+#dm-scenario-menu summary::-webkit-details-marker {
+  display: none;
+}
+#dm-scenario-menu summary span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#dm-scenario-menu[open] summary {
+  border-color: var(--gold);
+}
+.scenario-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  left: 0;
+  z-index: 12;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.6rem;
+  background: var(--panel2);
+  border: 1px solid var(--gold);
+  border-radius: 9px;
+  box-shadow: 0 12px 35px #000c;
+}
+.scenario-menu-popover p {
+  margin: 0 0 0.25rem;
+}
+.scenario-menu-popover button {
+  width: 100%;
+  text-align: left;
+}
+#dm-panel-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.3rem;
-  padding: 0.2rem 0 0.65rem;
-  background: var(--panel);
 }
 #dm-panel-tabs button {
   min-width: 0;
@@ -274,9 +327,6 @@ aside section {
   padding: 0 0.35rem 2rem 0;
 }
 #inspector h2 {
-  position: sticky;
-  top: 48px;
-  z-index: 2;
   margin-top: 0;
   padding: 0.65rem 0;
   background: var(--panel);
@@ -572,7 +622,16 @@ main {
 }
 .encounter-bar-state {
   display: grid;
+  flex: 1;
   min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+}
+.encounter-bar-state:hover {
+  color: #ffe2a5;
 }
 .encounter-bar-state small {
   color: var(--gold);
@@ -1178,15 +1237,12 @@ legend {
   .right-panel-collapsed #right-panel-toggle {
     transform: rotate(180deg);
   }
-  #dm-panel-tabs {
+  #dm-panel-header {
     top: 34px;
   }
   #inspector {
     max-height: none;
     min-height: 120px;
-  }
-  #inspector h2 {
-    top: 78px;
   }
   .is-dm #encounter-bar {
     position: fixed;

@@ -16,6 +16,9 @@ function displayHp(v, t = null) {
 function formData(form) {
   return Object.fromEntries(new FormData(form));
 }
+function isMobileLayout() {
+  return typeof matchMedia === 'function' && matchMedia('(max-width:850px)').matches;
+}
 
 // Authentication and initial application state.
 $$('[data-auth-tab]').forEach(
@@ -81,7 +84,10 @@ async function start() {
   $$('.player-only').forEach((e) => (e.hidden = me.user.role !== 'PLAYER'));
   $('#characters-panel').hidden = me.user.role !== 'PLAYER';
   $('#encounter-bar').hidden = true;
-  if (me.user.role === 'DM') activateDmPanelTab(state.dmPanelTab);
+  if (me.user.role === 'DM') {
+    activateDmPanelTab(state.dmPanelTab);
+    if (isMobileLayout()) document.body.classList.add('right-panel-collapsed');
+  }
   if (me.user.role === 'GUEST') {
     $('[data-mode="pan"]').hidden = true;
     $('#zoom-in').hidden = true;
@@ -232,6 +238,9 @@ function activateDmPanelTab(name, expand = false) {
 $$('[data-dm-panel-tab]').forEach(
   (button) => (button.onclick = () => activateDmPanelTab(button.dataset.dmPanelTab, true)),
 );
+$$('#dm-scenario-menu button').forEach((button) =>
+  button.addEventListener('click', () => ($('#dm-scenario-menu').open = false)),
+);
 
 // Realtime synchronization, chat, and encounter panels.
 function wsUrl() {
@@ -304,6 +313,8 @@ async function syncScenarioList() {
 }
 async function openScenario(id) {
   state.pendingTurn = null;
+  if (state.user.role === 'DM' && isMobileLayout())
+    document.body.classList.add('right-panel-collapsed');
   state.scenarioId = +id;
   state.path = [];
   state.drawings = [];
@@ -630,6 +641,29 @@ function updateActivityBadge() {
   badge.hidden = total === 0;
 }
 
+function currentEncounterActor() {
+  const encounter = state.data?.encounter;
+  const participant = state.data?.participants?.find(
+    (item) => +item.id === +encounter?.current_participant_id,
+  );
+  const token = participant
+    ? participant.actor_type === 'PLAYER'
+      ? state.data.players.find((item) => +item.id === +participant.actor_id)
+      : state.data.npcs.find((item) => +item.id === +participant.actor_id)
+    : null;
+  return { participant, token };
+}
+
+function focusCurrentParticipant() {
+  const { token } = currentEncounterActor();
+  if (!token) return toast('No hay un participante actual para centrar');
+  const bounds = canvas.getBoundingClientRect();
+  state.camera.x = bounds.width / 2 - (+token.x + 0.5) * cellSize * state.camera.z;
+  state.camera.y = bounds.height / 2 - (+token.y + 0.5) * cellSize * state.camera.z;
+  draw();
+  publishDmView();
+}
+
 function renderEncounterBar() {
   const bar = $('#encounter-bar');
   if (!bar || state.user?.role !== 'DM') return;
@@ -641,14 +675,7 @@ function renderEncounterBar() {
     encounter.state === 'RUNNING'
       ? `Ronda ${encounter.round_no || 0} · Turno ${encounter.turn_sequence || 0}`
       : encounter.state;
-  const participant = state.data.participants.find(
-    (item) => +item.id === +encounter.current_participant_id,
-  );
-  const token = participant
-    ? participant.actor_type === 'PLAYER'
-      ? state.data.players.find((item) => +item.id === +participant.actor_id)
-      : state.data.npcs.find((item) => +item.id === +participant.actor_id)
-    : null;
+  const { participant, token } = currentEncounterActor();
   $('#encounter-bar-current').textContent = token
     ? token.name || token.user_name || participant.actor_type
     : encounter.state === 'PREPARING'
@@ -941,6 +968,10 @@ if ($('#player-chat-open'))
     const t = state.chatThreads[0];
     if (t) openChat(+t.id, 'DM');
   };
+$('#encounter-current-focus').onclick = () => {
+  focusCurrentParticipant();
+  activateDmPanelTab('encounter', true);
+};
 $('#encounter-prepare').onclick = () => command('encounter.prepare');
 $('#encounter-start').onclick = () => handleEncounterStart();
 $('#encounter-log').onclick = () => downloadEncounterLog();

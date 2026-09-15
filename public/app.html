@@ -135,11 +135,16 @@
               <div id="cell-menu" class="floating" hidden></div>
             </div>
             <section id="encounter-bar" class="dm-only" aria-label="Turno actual" hidden>
-              <div class="encounter-bar-state">
+              <button
+                id="encounter-current-focus"
+                class="encounter-bar-state"
+                type="button"
+                title="Abrir el encounter y centrar el participante actual"
+              >
                 <small id="encounter-bar-round">Encounter</small>
                 <strong id="encounter-bar-current">Sin turno actual</strong>
                 <span id="encounter-bar-health" class="muted"></span>
-              </div>
+              </button>
               <div class="encounter-bar-actions">
                 <button id="turn-rollback">← Devolver</button>
                 <button id="turn-next" class="primary">Siguiente turno →</button>
@@ -149,29 +154,29 @@
         </main>
         <aside id="right-panel" hidden>
           <button id="right-panel-toggle" type="button" aria-label="Contraer panel">⌄</button>
-          <nav id="dm-panel-tabs" class="dm-only" aria-label="Panel del DM">
-            <button type="button" class="active" data-dm-panel-tab="inspector">Inspector</button>
-            <button type="button" data-dm-panel-tab="encounter">Encounter</button>
-            <button type="button" data-dm-panel-tab="activity">
-              Actividad <span id="activity-badge" class="tab-badge" hidden>0</span>
-            </button>
-          </nav>
-          <div class="dm-panel dm-only" data-dm-panel="inspector">
-            <details class="panel-accordion" open>
+          <div id="dm-panel-header" class="dm-only">
+            <details id="dm-scenario-menu">
               <summary>
-                <span id="scenario-title">Escenario</span
-                ><span class="accordion-chevron" aria-hidden="true">⌄</span>
+                <span id="scenario-title">Escenario</span>
+                <span aria-hidden="true">▾</span>
               </summary>
-              <section class="accordion-content">
-                <div class="row">
-                  <button id="toggle-active"></button
-                  ><button id="copy-alive-previous">Copiar vivos del mapa anterior</button
-                  ><button id="upload-background">Imagen de fondo</button>
-                </div>
-                <button id="delete-scenario" class="danger-action">Eliminar Mapa</button>
+              <div class="scenario-menu-popover">
                 <p id="scenario-status" class="muted"></p>
-              </section>
+                <button id="toggle-active"></button>
+                <button id="upload-background">Cambiar imagen de fondo</button>
+                <button id="copy-alive-previous">Copiar vivos del mapa anterior</button>
+                <button id="delete-scenario" class="danger-action">Eliminar mapa</button>
+              </div>
             </details>
+            <nav id="dm-panel-tabs" aria-label="Panel del DM">
+              <button type="button" class="active" data-dm-panel-tab="inspector">Inspector</button>
+              <button type="button" data-dm-panel-tab="encounter">Encounter</button>
+              <button type="button" data-dm-panel-tab="activity">
+                Actividad <span id="activity-badge" class="tab-badge" hidden>0</span>
+              </button>
+            </nav>
+          </div>
+          <div class="dm-panel dm-only" data-dm-panel="inspector">
             <section id="inspector">
               <h2>Selección</h2>
               <p class="muted">Toca un token para inspeccionarlo.</p>
