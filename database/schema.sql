@@ -210,6 +210,7 @@ CREATE TABLE encounters (
  state ENUM('OFF','PREPARING','RUNNING','PAUSED','FINISHED') NOT NULL DEFAULT 'OFF',
  round_no INT UNSIGNED NOT NULL DEFAULT 0,
  current_participant_id BIGINT UNSIGNED NULL,
+ turn_cursor_id BIGINT UNSIGNED NULL,
  turn_sequence INT UNSIGNED NOT NULL DEFAULT 0,
  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE
@@ -222,6 +223,7 @@ CREATE TABLE encounter_participants (
  actor_id BIGINT UNSIGNED NOT NULL,
  initiative INT NULL,
  tie_order INT NOT NULL DEFAULT 0,
+ last_turn_round INT UNSIGNED NOT NULL DEFAULT 0,
  state ENUM('ACTIVE','WAITING','DEAD','REMOVED') NOT NULL DEFAULT 'ACTIVE',
  UNIQUE(encounter_id,actor_type,actor_id),
  FOREIGN KEY (encounter_id) REFERENCES encounters(id) ON DELETE CASCADE,
@@ -229,6 +231,7 @@ CREATE TABLE encounter_participants (
 ) ENGINE=InnoDB;
 
 ALTER TABLE encounters ADD CONSTRAINT fk_encounter_current FOREIGN KEY (current_participant_id) REFERENCES encounter_participants(id) ON DELETE SET NULL;
+ALTER TABLE encounters ADD CONSTRAINT fk_encounter_cursor FOREIGN KEY (turn_cursor_id) REFERENCES encounter_participants(id) ON DELETE SET NULL;
 
 CREATE TABLE encounter_turn_history (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -236,6 +239,7 @@ CREATE TABLE encounter_turn_history (
  previous_participant_id BIGINT UNSIGNED NULL,
  previous_round_no INT UNSIGNED NOT NULL,
  previous_turn_sequence INT UNSIGNED NOT NULL,
+ scheduling_snapshot JSON NULL,
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
  FOREIGN KEY (encounter_id) REFERENCES encounters(id) ON DELETE CASCADE,
  FOREIGN KEY (previous_participant_id) REFERENCES encounter_participants(id) ON DELETE SET NULL,
@@ -250,6 +254,7 @@ CREATE TABLE turn_delays (
  round_no INT UNSIGNED NOT NULL,
  sort_order INT NOT NULL DEFAULT 0,
  triggered BOOLEAN NOT NULL DEFAULT FALSE,
+ ready BOOLEAN NOT NULL DEFAULT FALSE,
  FOREIGN KEY (encounter_id) REFERENCES encounters(id) ON DELETE CASCADE,
  FOREIGN KEY (waiting_participant_id) REFERENCES encounter_participants(id) ON DELETE CASCADE,
  FOREIGN KEY (target_participant_id) REFERENCES encounter_participants(id) ON DELETE CASCADE

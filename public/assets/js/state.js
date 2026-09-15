@@ -4,6 +4,8 @@ export const state = {
   bootstrap: null,
   scenarioId: null,
   ws: null,
+  pendingTurn: null,
+  inspectorSaveTimer: null,
   mode: 'pan',
   camera: { x: 30, y: 30, z: 1 },
   path: [],

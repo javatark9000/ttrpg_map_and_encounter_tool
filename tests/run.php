@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
+require __DIR__ . '/turns.php';
 
 use Ttrpg\Auth;
 use Ttrpg\Database;
@@ -447,6 +448,8 @@ try {
         $trigger['data']['currentParticipantId'] === (int) $after['data']['currentParticipantId'],
         'el objetivo activa el turno retrasado',
     );
+
+    testTurnRegressions($db, $game, $dm, $player, $campaign);
 
     $selector = bin2hex(random_bytes(12));
     $validator = bin2hex(random_bytes(32));

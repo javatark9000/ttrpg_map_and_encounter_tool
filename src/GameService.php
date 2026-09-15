@@ -84,6 +84,7 @@ final class GameService
             );
         }
         if ($user['role'] !== 'DM' && $encounter) {
+            unset($encounter['turn_cursor_id']);
             $participants = array_values(
                 array_filter($participants, fn($part) => $part['actor_type'] === 'PLAYER'),
             );
@@ -379,6 +380,22 @@ final class GameService
                 throw new RuntimeException('Escenario inexistente.');
             }
             $this->assertMember((int) $s['campaign_id'], (int) $user['id']);
+            // Recheck under the scenario lock: concurrent retries must be idempotent too.
+            $receipt = $this->one(
+                'SELECT response FROM command_receipts WHERE request_id=? AND user_id=?',
+                [$requestId, $user['id']],
+            );
+            if ($receipt) {
+                return json_decode($receipt['response'], true);
+            }
+            if (
+                isset($p['expectedVersion']) &&
+                (int) $p['expectedVersion'] !== (int) $s['version']
+            ) {
+                throw new RuntimeException(
+                    'El estado cambió. Espera a que se actualice antes de cambiar de turno.',
+                );
+            }
             $dmOnly = [
                 'scenario.activate',
                 'scenario.deactivate',
@@ -909,7 +926,7 @@ final class GameService
                 array_push($params, ...$npcs);
                 $this->db
                     ->prepare(
-                        "DELETE FROM encounter_participants WHERE encounter_id=? AND actor_type='NPC' AND actor_id IN ($ph)",
+                        "UPDATE encounter_participants SET state='REMOVED' WHERE encounter_id=? AND actor_type='NPC' AND actor_id IN ($ph)",
                     )
                     ->execute($params);
             }
@@ -944,7 +961,7 @@ final class GameService
             if ($enc) {
                 $this->db
                     ->prepare(
-                        "DELETE FROM encounter_participants WHERE encounter_id=? AND actor_type='NPC' AND actor_id=?",
+                        "UPDATE encounter_participants SET state='REMOVED' WHERE encounter_id=? AND actor_type='NPC' AND actor_id=?",
                     )
                     ->execute([$enc['id'], $id]);
             }
@@ -1043,14 +1060,21 @@ final class GameService
     {
         $kind = strtoupper((string) ($p['kind'] ?? ''));
         $id = (int) ($p['id'] ?? 0);
+        $domainChange = false;
         if ($kind === 'NPC') {
+            if (array_key_exists('health', $p)) {
+                $this->healthSet((int) $s['id'], $p);
+                $domainChange = true;
+            }
+            if (array_key_exists('initiative', $p)) {
+                $this->initiativeSet((int) $s['id'], $p);
+                $domainChange = true;
+            }
             $fields = [
                 'name',
                 'notes',
-                'health',
                 'armor_class',
                 'rotation_degrees',
-                'initiative',
                 'visible',
                 'dead_hidden',
                 'image_asset_id',
@@ -1101,6 +1125,9 @@ final class GameService
             }
         }
         if (!$sets) {
+            if ($domainChange) {
+                return ['kind' => $kind, 'id' => $id];
+            }
             throw new RuntimeException('No hay cambios.');
         }
         $vals[] = $id;
@@ -1355,11 +1382,21 @@ final class GameService
     {
         $this->db
             ->prepare(
-                "INSERT INTO encounters(scenario_id,state) VALUES (?,'PREPARING') ON DUPLICATE KEY UPDATE state='PREPARING',round_no=0,current_participant_id=NULL,turn_sequence=0",
+                "INSERT INTO encounters(scenario_id,state) VALUES (?,'PREPARING') ON DUPLICATE KEY UPDATE state='PREPARING',round_no=0,current_participant_id=NULL,turn_cursor_id=NULL,turn_sequence=0",
             )
             ->execute([$sid]);
         $enc = $this->one('SELECT id FROM encounters WHERE scenario_id=?', [$sid]);
         if ($enc) {
+            $this->db
+                ->prepare('DELETE FROM encounter_turn_history WHERE encounter_id=?')
+                ->execute([$enc['id']]);
+            $this->db
+                ->prepare('DELETE FROM turn_delays WHERE encounter_id=?')
+                ->execute([$enc['id']]);
+            $this->db
+                ->prepare('DELETE FROM encounter_participants WHERE encounter_id=?')
+                ->execute([$enc['id']]);
+            $this->syncParticipants((int) $enc['id'], $sid);
             $this->db
                 ->prepare('DELETE FROM encounter_health_log WHERE encounter_id=?')
                 ->execute([$enc['id']]);
@@ -1377,6 +1414,13 @@ final class GameService
         } else {
             $this->syncParticipants((int) $e['id'], $sid);
         }
+        $this->db->prepare('DELETE FROM turn_delays WHERE encounter_id=?')->execute([$e['id']]);
+        $this->db
+            ->prepare('DELETE FROM encounter_turn_history WHERE encounter_id=?')
+            ->execute([$e['id']]);
+        $this->db
+            ->prepare('UPDATE encounter_participants SET last_turn_round=0 WHERE encounter_id=?')
+            ->execute([$e['id']]);
         $first = $this->one(
             "SELECT * FROM encounter_participants WHERE encounter_id=? AND initiative IS NOT NULL AND state='ACTIVE' ORDER BY initiative DESC,tie_order,id LIMIT 1",
             [$e['id']],
@@ -1385,10 +1429,13 @@ final class GameService
             throw new RuntimeException('No hay participantes con iniciativa.');
         }
         $this->db
+            ->prepare('UPDATE encounter_participants SET last_turn_round=1 WHERE id=?')
+            ->execute([$first['id']]);
+        $this->db
             ->prepare(
-                "UPDATE encounters SET state='RUNNING',round_no=1,current_participant_id=?,turn_sequence=1 WHERE id=?",
+                "UPDATE encounters SET state='RUNNING',round_no=1,current_participant_id=?,turn_cursor_id=?,turn_sequence=1 WHERE id=?",
             )
-            ->execute([$first['id'], $e['id']]);
+            ->execute([$first['id'], $first['id'], $e['id']]);
         return ['state' => 'RUNNING', 'round' => 1, 'currentParticipantId' => (int) $first['id']];
     }
     private function encounterInclude(int $sid, array $p): array
@@ -1412,17 +1459,28 @@ final class GameService
             throw new RuntimeException('No hay combate activo.');
         }
         $first = $this->one(
-            "SELECT * FROM encounter_participants WHERE encounter_id=? AND initiative IS NOT NULL AND state='ACTIVE' ORDER BY initiative DESC,tie_order,id LIMIT 1",
+            "SELECT * FROM encounter_participants WHERE encounter_id=? AND initiative IS NOT NULL AND state IN ('ACTIVE','WAITING') ORDER BY initiative DESC,tie_order,id LIMIT 1",
             [$e['id']],
         );
         if (!$first) {
             throw new RuntimeException('No hay participantes activos.');
         }
         $this->saveTurnHistory($e);
+        $this->db->prepare('DELETE FROM turn_delays WHERE encounter_id=?')->execute([$e['id']]);
+        $this->db
+            ->prepare(
+                "UPDATE encounter_participants SET last_turn_round=0,state=IF(state='WAITING','ACTIVE',state) WHERE encounter_id=?",
+            )
+            ->execute([$e['id']]);
         $seq = (int) $e['turn_sequence'] + 1;
         $this->db
-            ->prepare('UPDATE encounters SET current_participant_id=?,turn_sequence=? WHERE id=?')
-            ->execute([$first['id'], $seq, $e['id']]);
+            ->prepare('UPDATE encounter_participants SET last_turn_round=? WHERE id=?')
+            ->execute([$e['round_no'], $first['id']]);
+        $this->db
+            ->prepare(
+                'UPDATE encounters SET current_participant_id=?,turn_cursor_id=?,turn_sequence=? WHERE id=?',
+            )
+            ->execute([$first['id'], $first['id'], $seq, $e['id']]);
         return [
             'state' => 'RUNNING',
             'round' => (int) $e['round_no'],
@@ -1440,9 +1498,17 @@ final class GameService
         }
         $this->db
             ->prepare(
-                "UPDATE encounters SET state='OFF',current_participant_id=NULL WHERE scenario_id=?",
+                "UPDATE encounters SET state='OFF',current_participant_id=NULL,turn_cursor_id=NULL WHERE scenario_id=?",
             )
             ->execute([$sid]);
+        if ($e) {
+            $this->db->prepare('DELETE FROM turn_delays WHERE encounter_id=?')->execute([$e['id']]);
+            $this->db
+                ->prepare(
+                    "UPDATE encounter_participants SET state='ACTIVE' WHERE encounter_id=? AND state='WAITING'",
+                )
+                ->execute([$e['id']]);
+        }
         return ['state' => 'OFF'];
     }
 
@@ -1465,7 +1531,54 @@ final class GameService
         }
         $e = $this->one('SELECT * FROM encounters WHERE scenario_id=?', [$sid]);
         if ($e) {
-            $this->syncParticipants((int) $e['id'], $sid);
+            $part = $this->one(
+                'SELECT * FROM encounter_participants WHERE encounter_id=? AND actor_type=? AND actor_id=?',
+                [$e['id'], $kind, $id],
+            );
+            if ($part) {
+                $previous = $part['initiative'] === null ? null : (int) $part['initiative'];
+                if (
+                    $e['state'] === 'RUNNING' &&
+                    (int) $e['turn_cursor_id'] === (int) $part['id'] &&
+                    $previous !== $value
+                ) {
+                    throw new RuntimeException(
+                        'Avanza el turno antes de cambiar la iniciativa de la posición actual.',
+                    );
+                }
+                $this->db
+                    ->prepare('UPDATE encounter_participants SET initiative=? WHERE id=?')
+                    ->execute([$value, $part['id']]);
+                if ($value === null) {
+                    $this->db
+                        ->prepare(
+                            'UPDATE turn_delays SET ready=1 WHERE target_participant_id=? AND triggered=0',
+                        )
+                        ->execute([$part['id']]);
+                    $this->db
+                        ->prepare('DELETE FROM turn_delays WHERE waiting_participant_id=?')
+                        ->execute([$part['id']]);
+                    $this->db
+                        ->prepare(
+                            "UPDATE encounter_participants SET state='ACTIVE' WHERE id=? AND state='WAITING'",
+                        )
+                        ->execute([$part['id']]);
+                }
+            } elseif ($e['state'] === 'PREPARING') {
+                $eligible =
+                    $kind === 'NPC'
+                        ? $this->one(
+                            'SELECT 1 FROM npc_characters WHERE id=? AND scenario_id=? AND visible=1',
+                            [$id, $sid],
+                        )
+                        : $this->one(
+                            'SELECT 1 FROM scenario_players WHERE id=? AND scenario_id=? AND placed=1',
+                            [$id, $sid],
+                        );
+                if ($eligible) {
+                    $this->upsertParticipant((int) $e['id'], $sid, $kind, $id);
+                }
+            }
         }
         return ['kind' => $kind, 'id' => $id, 'initiative' => $value];
     }
@@ -1501,9 +1614,10 @@ final class GameService
         $current = $this->one('SELECT * FROM encounter_participants WHERE id=?', [
             $e['current_participant_id'],
         ]);
-        if (!$current) {
+        if (!$current || $current['state'] !== 'ACTIVE' || $current['initiative'] === null) {
             throw new RuntimeException('Turno inválido.');
         }
+        $this->saveTurnHistory($e);
         if ($user['role'] !== 'DM') {
             if ($current['actor_type'] !== 'PLAYER') {
                 throw new RuntimeException('No puedes retrasar este turno.');
@@ -1531,7 +1645,7 @@ final class GameService
         );
         $currentPos = $targetPos = -1;
         foreach ($ordered as $i => $part) {
-            if ((int) $part['id'] === (int) $current['id']) {
+            if ((int) $part['id'] === (int) $e['turn_cursor_id']) {
                 $currentPos = $i;
             }
             if ((int) $part['id'] === $target) {
@@ -1553,7 +1667,7 @@ final class GameService
                 $targetRound,
                 (int) ($p['sortOrder'] ?? 0),
             ]);
-        return $this->advanceNormal($e, (int) $current['id']);
+        return $this->advanceTurn($e, false);
     }
 
     private function turnDelayOrder(int $sid, array $p): array
@@ -1563,6 +1677,9 @@ final class GameService
             throw new RuntimeException('No hay encounter.');
         }
         $ids = $p['delayIds'] ?? [];
+        if (!is_array($ids)) {
+            throw new RuntimeException('Orden inválido.');
+        }
         $q = $this->db->prepare(
             'UPDATE turn_delays SET sort_order=? WHERE id=? AND encounter_id=?',
         );
@@ -1582,15 +1699,27 @@ final class GameService
             throw new RuntimeException('No hay combate activo.');
         }
         $this->saveTurnHistory($e);
-        $currentId = (int) $e['current_participant_id'];
-        $chain = $this->one(
-            'SELECT target_participant_id FROM turn_delays WHERE encounter_id=? AND waiting_participant_id=? AND round_no=? AND triggered=1',
-            [$e['id'], $currentId, $e['round_no']],
-        );
-        $target = $chain ? (int) $chain['target_participant_id'] : $currentId;
+        return $this->advanceTurn($e, true);
+    }
+
+    private function advanceTurn(array $e, bool $completed): array
+    {
+        // A dead/removed waiter must never be revived by an old delay.
+        $this->db
+            ->prepare(
+                "DELETE d FROM turn_delays d JOIN encounter_participants p ON p.id=d.waiting_participant_id WHERE d.encounter_id=? AND (p.state IN ('DEAD','REMOVED') OR p.initiative IS NULL)",
+            )
+            ->execute([$e['id']]);
+        // Release waits when their target finishes, dies, leaves, or loses initiative.
+        // ready persists while several waiters are served; it does not depend on who is current.
+        $this->db
+            ->prepare(
+                "UPDATE turn_delays d JOIN encounter_participants p ON p.id=d.target_participant_id SET d.ready=1 WHERE d.encounter_id=? AND d.triggered=0 AND (p.state IN ('DEAD','REMOVED') OR p.initiative IS NULL OR (?=1 AND p.id=? AND d.round_no<=?))",
+            )
+            ->execute([$e['id'], $completed ? 1 : 0, $e['current_participant_id'], $e['round_no']]);
         $delay = $this->one(
-            'SELECT * FROM turn_delays WHERE encounter_id=? AND target_participant_id=? AND round_no=? AND triggered=0 ORDER BY sort_order,id LIMIT 1',
-            [$e['id'], $target, $e['round_no']],
+            "SELECT d.* FROM turn_delays d JOIN encounter_participants p ON p.id=d.waiting_participant_id WHERE d.encounter_id=? AND d.triggered=0 AND d.ready=1 AND p.state='WAITING' AND p.initiative IS NOT NULL ORDER BY d.sort_order,d.id LIMIT 1",
+            [$e['id']],
         );
         if ($delay) {
             $this->db
@@ -1599,61 +1728,67 @@ final class GameService
             $this->db
                 ->prepare("UPDATE encounter_participants SET state='ACTIVE' WHERE id=?")
                 ->execute([$delay['waiting_participant_id']]);
-            $seq = (int) $e['turn_sequence'] + 1;
-            $this->db
-                ->prepare(
-                    'UPDATE encounters SET current_participant_id=?,turn_sequence=? WHERE id=?',
-                )
-                ->execute([$delay['waiting_participant_id'], $seq, $e['id']]);
-            return [
-                'state' => 'RUNNING',
-                'round' => (int) $e['round_no'],
-                'currentParticipantId' => (int) $delay['waiting_participant_id'],
-                'turnSequence' => $seq,
-            ];
+            return $this->assignTurn(
+                $e,
+                (int) $delay['waiting_participant_id'],
+                (int) $e['round_no'],
+                (int) $e['turn_cursor_id'],
+            );
         }
-        return $this->advanceNormal($e, $target);
+        return $this->advanceNormal($e);
     }
 
-    private function advanceNormal(array $e, int $afterId): array
+    private function advanceNormal(array $e): array
     {
+        // Removed actors remain as ordering anchors until the next encounter is prepared.
         $all = $this->all(
             'SELECT * FROM encounter_participants WHERE encounter_id=? AND initiative IS NOT NULL ORDER BY initiative DESC,tie_order,id',
             [$e['id']],
         );
-        $active = array_values(array_filter($all, fn($x) => $x['state'] === 'ACTIVE'));
-        if (!$active) {
-            throw new RuntimeException('No hay participantes activos.');
+        if (!array_filter($all, fn($p) => $p['state'] === 'ACTIVE')) {
+            return $this->encounterStop((int) $e['scenario_id']);
         }
-        $pos = -1;
-        foreach ($all as $i => $a) {
-            if ((int) $a['id'] === $afterId) {
-                $pos = $i;
+        $pos = array_search(
+            (int) $e['turn_cursor_id'],
+            array_map(fn($p) => (int) $p['id'], $all),
+            true,
+        );
+        if ($pos === false) {
+            throw new RuntimeException(
+                'Se perdió la posición del combate. Reinicia la ronda para continuar.',
+            );
+        }
+        $count = count($all);
+        for ($n = 1; $n <= $count * 2; $n++) {
+            $round = (int) $e['round_no'] + intdiv($pos + $n, $count);
+            $candidate = $all[($pos + $n) % $count];
+            if ($candidate['state'] === 'ACTIVE' && (int) $candidate['last_turn_round'] < $round) {
+                return $this->assignTurn(
+                    $e,
+                    (int) $candidate['id'],
+                    $round,
+                    (int) $candidate['id'],
+                );
             }
         }
-        $pick = null;
-        for ($n = 1; $n <= count($all); $n++) {
-            $candidate = $all[($pos + $n) % count($all)];
-            if ($candidate['state'] === 'ACTIVE') {
-                $pick = $candidate;
-                break;
-            }
-        }
-        $round = (int) $e['round_no'];
-        $pickPos = array_search($pick, $all, true);
-        if ($pickPos !== false && $pickPos <= $pos) {
-            $round++;
-        }
+        throw new RuntimeException('No hay un siguiente turno disponible.');
+    }
+
+    private function assignTurn(array $e, int $participantId, int $round, int $cursorId): array
+    {
         $seq = (int) $e['turn_sequence'] + 1;
         $this->db
+            ->prepare('UPDATE encounter_participants SET last_turn_round=? WHERE id=?')
+            ->execute([$round, $participantId]);
+        $this->db
             ->prepare(
-                'UPDATE encounters SET current_participant_id=?,round_no=?,turn_sequence=? WHERE id=?',
+                'UPDATE encounters SET current_participant_id=?,turn_cursor_id=?,round_no=?,turn_sequence=? WHERE id=?',
             )
-            ->execute([$pick['id'], $round, $seq, $e['id']]);
+            ->execute([$participantId, $cursorId, $round, $seq, $e['id']]);
         return [
             'state' => 'RUNNING',
             'round' => $round,
-            'currentParticipantId' => (int) $pick['id'],
+            'currentParticipantId' => $participantId,
             'turnSequence' => $seq,
         ];
     }
@@ -1674,12 +1809,57 @@ final class GameService
         if (!$h) {
             throw new RuntimeException('No hay turnos para devolver.');
         }
+        if (!$h['scheduling_snapshot']) {
+            throw new RuntimeException(
+                'Este historial es anterior a la actualización. Reinicia la ronda.',
+            );
+        }
+        $saved = json_decode($h['scheduling_snapshot'], true, 512, JSON_THROW_ON_ERROR);
+        $this->db->prepare('DELETE FROM turn_delays WHERE encounter_id=?')->execute([$e['id']]);
+        foreach ($saved['delays'] as $d) {
+            $this->db
+                ->prepare(
+                    'INSERT INTO turn_delays(id,encounter_id,waiting_participant_id,target_participant_id,round_no,sort_order,triggered,ready) VALUES (?,?,?,?,?,?,?,?)',
+                )
+                ->execute([
+                    $d['id'],
+                    $e['id'],
+                    $d['waiting_participant_id'],
+                    $d['target_participant_id'],
+                    $d['round_no'],
+                    $d['sort_order'],
+                    $d['triggered'],
+                    $d['ready'],
+                ]);
+        }
         $this->db
             ->prepare(
-                'UPDATE encounters SET current_participant_id=?,round_no=?,turn_sequence=? WHERE id=?',
+                "DELETE d FROM turn_delays d JOIN encounter_participants p ON p.id=d.waiting_participant_id WHERE d.encounter_id=? AND (p.state IN ('DEAD','REMOVED') OR p.initiative IS NULL)",
+            )
+            ->execute([$e['id']]);
+        $this->db
+            ->prepare('UPDATE encounter_participants SET last_turn_round=0 WHERE encounter_id=?')
+            ->execute([$e['id']]);
+        foreach ($saved['participants'] as $part) {
+            $this->db
+                ->prepare(
+                    'UPDATE encounter_participants SET last_turn_round=? WHERE id=? AND encounter_id=?',
+                )
+                ->execute([$part['last_turn_round'], $part['id'], $e['id']]);
+        }
+        // Undo scheduling, not damage, healing, explicit removals or initiative edits.
+        $this->db
+            ->prepare(
+                "UPDATE encounter_participants p SET state=IF(p.initiative IS NOT NULL AND EXISTS(SELECT 1 FROM turn_delays d WHERE d.waiting_participant_id=p.id AND d.triggered=0),'WAITING','ACTIVE') WHERE p.encounter_id=? AND p.state IN ('ACTIVE','WAITING')",
+            )
+            ->execute([$e['id']]);
+        $this->db
+            ->prepare(
+                'UPDATE encounters SET current_participant_id=?,turn_cursor_id=?,round_no=?,turn_sequence=? WHERE id=?',
             )
             ->execute([
                 $h['previous_participant_id'],
+                $saved['cursorId'],
                 $h['previous_round_no'],
                 $h['previous_turn_sequence'],
                 $e['id'],
@@ -1696,13 +1876,27 @@ final class GameService
     {
         $this->db
             ->prepare(
-                'INSERT INTO encounter_turn_history(encounter_id,previous_participant_id,previous_round_no,previous_turn_sequence) VALUES (?,?,?,?)',
+                'INSERT INTO encounter_turn_history(encounter_id,previous_participant_id,previous_round_no,previous_turn_sequence,scheduling_snapshot) VALUES (?,?,?,?,?)',
             )
             ->execute([
                 $e['id'],
                 $e['current_participant_id'],
                 $e['round_no'],
                 $e['turn_sequence'],
+                json_encode(
+                    [
+                        'cursorId' => $e['turn_cursor_id'],
+                        'participants' => $this->all(
+                            'SELECT id,last_turn_round FROM encounter_participants WHERE encounter_id=?',
+                            [$e['id']],
+                        ),
+                        'delays' => $this->all(
+                            'SELECT * FROM turn_delays WHERE encounter_id=? ORDER BY id',
+                            [$e['id']],
+                        ),
+                    ],
+                    JSON_THROW_ON_ERROR,
+                ),
             ]);
     }
 
@@ -1741,10 +1935,20 @@ final class GameService
                     ->prepare('UPDATE npc_characters SET health=? WHERE id=? AND scenario_id=?')
                     ->execute([$health, $id, $sid]);
             }
+            $this->db
+                ->prepare(
+                    "UPDATE encounter_participants ep JOIN encounters e ON e.id=ep.encounter_id SET ep.state=IF(?<=0,'DEAD',IF(ep.state='DEAD','ACTIVE',ep.state)) WHERE e.scenario_id=? AND ep.actor_type='NPC' AND ep.actor_id=? AND ep.state<>'REMOVED'",
+                )
+                ->execute([$health, $sid, $id]);
             if ($health <= 0) {
                 $this->db
                     ->prepare(
-                        "UPDATE encounter_participants ep JOIN encounters e ON e.id=ep.encounter_id SET ep.state='DEAD' WHERE e.scenario_id=? AND ep.actor_type='NPC' AND ep.actor_id=?",
+                        "UPDATE turn_delays d JOIN encounter_participants ep ON ep.id=d.target_participant_id JOIN encounters e ON e.id=ep.encounter_id SET d.ready=1 WHERE e.scenario_id=? AND ep.actor_type='NPC' AND ep.actor_id=? AND d.triggered=0",
+                    )
+                    ->execute([$sid, $id]);
+                $this->db
+                    ->prepare(
+                        "DELETE d FROM turn_delays d JOIN encounter_participants ep ON ep.id=d.waiting_participant_id JOIN encounters e ON e.id=ep.encounter_id WHERE e.scenario_id=? AND ep.actor_type='NPC' AND ep.actor_id=?",
                     )
                     ->execute([$sid, $id]);
             }
@@ -1887,7 +2091,7 @@ final class GameService
         }
         $this->db
             ->prepare(
-                'INSERT INTO encounter_participants(encounter_id,actor_type,actor_id,initiative,state) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE initiative=VALUES(initiative),state=VALUES(state)',
+                "INSERT INTO encounter_participants(encounter_id,actor_type,actor_id,initiative,state) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE initiative=VALUES(initiative),state=IF(state='WAITING' AND VALUES(state)='ACTIVE',state,VALUES(state))",
             )
             ->execute([$eid, $kind, $id, $row['initiative'], $state]);
     }

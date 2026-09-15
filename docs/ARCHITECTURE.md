@@ -15,24 +15,24 @@ MariaDB y `GameService` son autoritativos. El navegador nunca debe decidir por s
 
 ## Mapa de cambios
 
-| Cambio                                | Archivos principales                                       | Dependencias que puede ser necesario consultar                     |
-| ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| Login, registro, cookies              | `src/Auth.php`                                             | `public/index.php`, `database/schema.sql`                          |
-| Rutas HTTP                            | `public/index.php`                                         | `src/Http/common.php`                                              |
-| Uploads y entrega de imágenes         | `src/Http/assets.php`                                      | `public/index.php`, tablas `assets`                                |
-| Consultas y homebrew del Codex        | `src/Http/codex.php`                                       | tablas Codex de `database/schema.sql`, `public/assets/js/codex.js` |
-| Protocolo y difusión WebSocket        | `src/WebSocketServer.php`                                  | `bin/websocket.php`, métodos públicos de `GameService`             |
-| Reglas de mapa, movimiento o combate  | `src/GameService.php`                                      | `database/schema.sql`, `tests/run.php`                             |
-| Estado compartido del frontend        | `public/assets/js/state.js`                                | módulos que consuman la propiedad modificada                       |
-| HTTP, selectores y escape frontend    | `public/assets/js/core.js`                                 | ninguno normalmente                                                |
-| Formularios genéricos                 | `public/assets/js/dialogs.js`                              | `public/app.html`, `public/assets/styles.css`                      |
-| Interfaz del Codex                    | `public/assets/js/codex.js`                                | `src/Http/codex.php`                                               |
-| Canvas, escenario, tokens y encounter | `public/assets/app.js`                                     | `state.js`, `core.js`, `dialogs.js`                                |
-| Estructura visual                     | `public/app.html`                                          | `public/assets/styles.css`                                         |
-| Estilos                               | `public/assets/styles.css`                                 | `public/app.html` y el módulo que genere la clase afectada         |
-| Esquema nuevo                         | nueva migración y `database/schema.sql`                    | código que use la tabla o columna                                  |
+| Cambio                                | Archivos principales                                        | Dependencias que puede ser necesario consultar                     |
+| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------ |
+| Login, registro, cookies              | `src/Auth.php`                                              | `public/index.php`, `database/schema.sql`                          |
+| Rutas HTTP                            | `public/index.php`                                          | `src/Http/common.php`                                              |
+| Uploads y entrega de imágenes         | `src/Http/assets.php`                                       | `public/index.php`, tablas `assets`                                |
+| Consultas y homebrew del Codex        | `src/Http/codex.php`                                        | tablas Codex de `database/schema.sql`, `public/assets/js/codex.js` |
+| Protocolo y difusión WebSocket        | `src/WebSocketServer.php`                                   | `bin/websocket.php`, métodos públicos de `GameService`             |
+| Reglas de mapa, movimiento o combate  | `src/GameService.php`                                       | `database/schema.sql`, `tests/run.php`                             |
+| Estado compartido del frontend        | `public/assets/js/state.js`                                 | módulos que consuman la propiedad modificada                       |
+| HTTP, selectores y escape frontend    | `public/assets/js/core.js`                                  | ninguno normalmente                                                |
+| Formularios genéricos                 | `public/assets/js/dialogs.js`                               | `public/app.html`, `public/assets/styles.css`                      |
+| Interfaz del Codex                    | `public/assets/js/codex.js`                                 | `src/Http/codex.php`                                               |
+| Canvas, escenario, tokens y encounter | `public/assets/app.js`                                      | `state.js`, `core.js`, `dialogs.js`                                |
+| Estructura visual                     | `public/app.html`                                           | `public/assets/styles.css`                                         |
+| Estilos                               | `public/assets/styles.css`                                  | `public/app.html` y el módulo que genere la clase afectada         |
+| Esquema nuevo                         | nueva migración y `database/schema.sql`                     | código que use la tabla o columna                                  |
 | Datos privados/SRD                    | `bin/init-database-data.sh`, `bin/import-private-media.php` | servicios `codex-data-init`, `media-init` y `codex-media-init`     |
-| Despliegue                            | `Dockerfile`, `docker-compose.yml`, `.env.example`         | `README.md`                                                        |
+| Despliegue                            | `Dockerfile`, `docker-compose.yml`, `.env.example`          | `README.md`                                                        |
 
 ## HTTP
 
@@ -56,7 +56,7 @@ El cliente envía una de estas acciones de transporte:
 - `guest.view.get`
 - `heartbeat`
 
-`src/WebSocketServer.php` autentica, despacha y difunde. Las reglas de negocio de `command` pertenecen a `GameService::command()` y sus métodos asociados.
+`src/WebSocketServer.php` autentica, despacha y difunde. Las reglas de negocio de `command` pertenecen a `GameService::command()` y sus métodos asociados. Para el ciclo de turnos, esperas, historial y actualización del esquema, consulta [TURNOS.md](TURNOS.md).
 
 Cada comando de partida incluye un `requestId`. `GameService` lo registra en `command_receipts`, incrementa `scenarios.version` y escribe `scenario_events` dentro de una transacción. Después, WebSocket pide a los clientes afectados que recarguen su snapshot.
 

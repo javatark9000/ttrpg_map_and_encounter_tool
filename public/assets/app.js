@@ -238,6 +238,8 @@ function connectWs() {
   };
   ws.onclose = () => {
     clearInterval(ws._beat);
+    state.pendingTurn = null;
+    updateTurnControls();
     $('#connection').textContent = 'offline';
     $('#connection').className = 'pill offline';
     setTimeout(connectWs, 2500);
@@ -250,8 +252,16 @@ function connectWs() {
     else if (m.type === 'dm.view.changed') await followDmView(m);
     else if (m.type === 'chat.message') handleChatMessage(m.data);
     else if (m.type === 'draw.event') handleDrawEvent(m.data);
-    else if (m.type === 'command.error') toast(m.error);
-    else if (m.type === 'error') toast(m.error);
+    else if (m.type === 'command.accepted' && m.requestId === state.pendingTurn?.requestId) {
+      state.pendingTurn.version = +m.event.version;
+    } else if (m.type === 'command.error') {
+      if (m.requestId === state.pendingTurn?.requestId) {
+        state.pendingTurn = null;
+        updateTurnControls();
+        if (state.scenarioId) subscribe();
+      }
+      toast(m.error);
+    } else if (m.type === 'error') toast(m.error);
   };
 }
 async function syncScenarioList() {
@@ -278,6 +288,7 @@ async function syncScenarioList() {
     state.ws.send(JSON.stringify({ action: 'guest.view.get' }));
 }
 async function openScenario(id) {
+  state.pendingTurn = null;
   state.scenarioId = +id;
   state.path = [];
   state.drawings = [];
@@ -367,16 +378,39 @@ function command(type, payload = {}) {
     toast('Sin conexión');
     return;
   }
+  const turnCommand = type.startsWith('turn.') || type.startsWith('encounter.');
+  const requestId = crypto.randomUUID().replaceAll('-', '');
+  if (turnCommand) {
+    if (state.pendingTurn || !state.data) return;
+    payload = { ...payload, expectedVersion: +state.data.scenario.version };
+    state.pendingTurn = { requestId, scenarioId: state.scenarioId, version: null };
+    updateTurnControls();
+  }
   state.ws.send(
     JSON.stringify({
       action: 'command',
       type,
-      requestId: crypto.randomUUID().replaceAll('-', ''),
+      requestId,
       payload: { ...payload, scenarioId: state.scenarioId },
     }),
   );
 }
+function updateTurnControls() {
+  $$(
+    '#turn-next, #turn-rollback, #restart-round, #delay-turn, #inspect-end-turn, #encounter-start, #encounter-prepare, #encounter-stop',
+  ).forEach((button) => {
+    button.disabled = !!state.pendingTurn || state.ws?.readyState !== 1;
+  });
+}
 function handleSnapshot(data) {
+  if (+data.scenario.id !== state.scenarioId) return;
+  if (
+    +state.data?.scenario?.id === +data.scenario.id &&
+    +data.scenario.version < +state.data.scenario.version
+  )
+    return;
+  if (state.pendingTurn?.version != null && +data.scenario.version >= state.pendingTurn.version)
+    state.pendingTurn = null;
   prepareAnimations(state.data, data);
   const prev = state.lastPendingRequestIds;
   state.data = data;
@@ -597,7 +631,15 @@ function renderRoundOrder() {
           : state.data.npcs.find((x) => +x.id === +p.actor_id);
       if (!token) return null;
       if (p.actor_type === 'PLAYER' && !+token.placed) return null;
-      if (p.actor_type === 'NPC' && !+token.visible) return null;
+      const status =
+        p.state === 'WAITING'
+          ? ' · Esperando'
+          : p.state === 'DEAD'
+            ? ' · Muerto'
+            : p.initiative === null
+              ? ' · Sin iniciativa'
+              : '';
+      const hidden = p.actor_type === 'NPC' && !+token.visible ? ' · Oculto' : '';
       const current =
         encounter.current_participant_id && +encounter.current_participant_id === +p.id;
       const max =
@@ -605,7 +647,7 @@ function renderRoundOrder() {
           ? (token.max_health ?? token.health)
           : (token.max_health ?? token.health);
       return {
-        name: token.name || token.user_name || 'Token',
+        name: (token.name || token.user_name || 'Token') + status + hidden,
         initiative: p.initiative ?? token.initiative ?? '—',
         hp: token.health === undefined ? '—' : displayHp(token.health, { kind: p.actor_type }),
         max: max ?? '—',
@@ -620,7 +662,7 @@ function renderRoundOrder() {
             `<li class="${r.current ? 'current-round-token' : ''}"><span>${esc(r.name)} <small>(IR: ${esc(r.initiative)})</small></span><strong>${esc(r.hp)} / ${esc(r.max)}</strong></li>`,
         )
         .join('')
-    : '<li class="muted">No hay fichas visibles con iniciativa en el encounter.</li>';
+    : '<li class="muted">No hay fichas incluidas en el encounter.</li>';
 }
 
 function movementPathPreview(m, anchor) {
@@ -725,6 +767,7 @@ function renderDetails() {
   });
   if (selectionCount()) renderEntitySelection();
   else draw();
+  updateTurnControls();
 }
 $('#toggle-active').onclick = async () => {
   const active = +state.data.scenario.active;
@@ -2246,7 +2289,10 @@ $('#place-character').onclick = () => {
 };
 $('#delay-turn').onclick = async () => {
   const options = state.data.participants.filter(
-    (p) => +p.id !== +state.data.encounter?.current_participant_id,
+    (p) =>
+      +p.id !== +state.data.encounter?.current_participant_id &&
+      p.state === 'ACTIVE' &&
+      p.initiative !== null,
   );
   if (!options.length) return toast('No hay objetivo disponible');
   const values = await openForm({
@@ -2483,6 +2529,7 @@ function showCellMenu(tokens, x, y, additive = false) {
   menu.hidden = false;
 }
 function inspect(t) {
+  clearTimeout(state.inspectorSaveTimer);
   const i = $('#inspector'),
     encounterOn = state.data?.encounter && state.data.encounter.state !== 'OFF',
     combatOn = state.data?.encounter && state.data.encounter.state === 'RUNNING',
@@ -2550,7 +2597,9 @@ function inspect(t) {
       if (cur) cur.textContent = String(displayHp(next, t));
       command('health.set', { kind: t.kind, id: +t.id, health: next });
     };
+    const card = i.querySelector('.token-card');
     const saveInspect = () => {
+      if (!card.isConnected || !i.contains(card)) return;
       applyIncomingDamage();
       if ($('#inspect-hp'))
         command('health.set', {
@@ -2559,12 +2608,12 @@ function inspect(t) {
           health: +$('#inspect-hp').value,
           ...($('#inspect-max-hp') ? { maxHealth: +$('#inspect-max-hp').value } : {}),
         });
-      if ($('#inspect-init'))
-        command('initiative.set', {
-          kind: t.kind,
-          id: +t.id,
-          initiative: $('#inspect-init').value === '' ? null : +$('#inspect-init').value,
-        });
+      if ($('#inspect-init')) {
+        const initiative = $('#inspect-init').value === '' ? null : +$('#inspect-init').value;
+        const previous = t.initiative == null ? null : +t.initiative;
+        if (initiative !== previous)
+          command('initiative.set', { kind: t.kind, id: +t.id, initiative });
+      }
       if (t.kind !== 'PLAYER') {
         const changes = {
           kind: t.kind,
@@ -2595,7 +2644,6 @@ function inspect(t) {
       });
     }
     if ($('#inspect-heal')) $('#inspect-heal').onclick = () => healTokens([t]);
-    let saveTimer = null;
     [
       'inspect-hp',
       'inspect-max-hp',
@@ -2610,8 +2658,8 @@ function inspect(t) {
       const el = $('#' + id);
       if (el)
         el.addEventListener('input', () => {
-          clearTimeout(saveTimer);
-          saveTimer = setTimeout(saveInspect, 650);
+          clearTimeout(state.inspectorSaveTimer);
+          state.inspectorSaveTimer = setTimeout(saveInspect, 650);
         });
     });
     $('#inspect-move').onclick = () => {
@@ -2639,6 +2687,7 @@ function inspect(t) {
       $('#inspect-include-combat').onclick = () =>
         command('encounter.include', { kind: t.kind, id: +t.id });
     if ($('#inspect-end-turn')) $('#inspect-end-turn').onclick = () => command('turn.next');
+    updateTurnControls();
     if ($('#inspect-image'))
       $('#inspect-image').onclick = () => {
         uploadTarget = { kind: t.kind, id: +t.id };
