@@ -5,6 +5,7 @@ namespace Ttrpg;
 
 use RuntimeException;
 use Workerman\Connection\TcpConnection;
+use Workerman\Timer;
 use Workerman\Worker;
 
 final class WebSocketServer
@@ -118,6 +119,37 @@ final class WebSocketServer
                 $this->broadcastRefresh($worker, (int) $result['scenarioId']);
                 return;
             }
+            if ($kind === 'dice.roll') {
+                $scenarioId = (int) ($m['scenarioId'] ?? 0);
+                if (($this->meta[$from->id]['scenario'] ?? null) !== $scenarioId) {
+                    throw new RuntimeException('Suscríbete al escenario antes de lanzar.');
+                }
+                $roll = $this->game->startDiceRoll($scenarioId, $user);
+                $this->broadcastDice($worker, $scenarioId, [
+                    'type' => 'dice.roll.started',
+                    'scenarioId' => $scenarioId,
+                    'rollId' => $roll['id'],
+                    'rollerName' => $roll['rollerName'],
+                    'durationMs' => 1500,
+                ]);
+                Timer::add(
+                    1.5,
+                    function () use ($worker, $scenarioId, $roll) {
+                        $revealed = $this->game->revealDiceRoll((int) $roll['id']);
+                        if (!$revealed) {
+                            return;
+                        }
+                        $this->broadcastDice($worker, $scenarioId, [
+                            'type' => 'dice.roll.revealed',
+                            'scenarioId' => $scenarioId,
+                            'data' => $revealed,
+                        ]);
+                    },
+                    [],
+                    false,
+                );
+                return;
+            }
             if ($kind === 'chat.send') {
                 $scenarioId = (int) ($m['scenarioId'] ?? 0);
                 $msg = $this->game->sendChatMessage(
@@ -203,6 +235,14 @@ final class WebSocketServer
                 ($u['role'] === 'PLAYER' && (int) $u['id'] === (int) ($msg['player_id'] ?? 0))
             ) {
                 $this->send($c, ['type' => 'chat.message', 'scenarioId' => $sid, 'data' => $msg]);
+            }
+        }
+    }
+    private function broadcastDice(Worker $worker, int $sid, array $message): void
+    {
+        foreach ($worker->connections as $c) {
+            if (($this->meta[$c->id]['scenario'] ?? null) === $sid) {
+                $this->send($c, $message);
             }
         }
     }

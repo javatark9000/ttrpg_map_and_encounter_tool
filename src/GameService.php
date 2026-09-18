@@ -52,12 +52,11 @@ final class GameService
         if ($user['role'] !== 'DM' && !(bool) $s['active']) {
             throw new RuntimeException('El escenario no está activo.');
         }
-        $mapFocus =
-            $this->one(
-                'SELECT x,y,width_cells,height_cells FROM scenario_map_focus WHERE scenario_id=?',
-                [$scenarioId],
-            ) ?:
-            null;
+        $mapFocusAreas = $this->all(
+            'SELECT id,x,y,width_cells,height_cells FROM scenario_map_focus WHERE scenario_id=? ORDER BY id',
+            [$scenarioId],
+        );
+        $mapFocus = $this->mapFocusBounds($mapFocusAreas);
         $blocked = $this->all('SELECT x,y FROM blocked_cells WHERE scenario_id=?', [$scenarioId]);
         $objects = $this->all(
             'SELECT o.*,a.path image_path FROM map_objects o LEFT JOIN assets a ON a.id=o.image_asset_id WHERE o.scenario_id=?' .
@@ -109,6 +108,13 @@ final class GameService
             $user['role'] === 'DM'
                 ? $this->all('SELECT * FROM cell_notes WHERE scenario_id=?', [$scenarioId])
                 : [];
+        $diceRolls =
+            $user['role'] === 'DM'
+                ? $this->all(
+                    'SELECT r.id,r.result,r.in_combat,r.round_no,r.created_at,UNIX_TIMESTAMP(r.created_at) created_at_unix,u.name roller_name FROM scenario_dice_rolls r JOIN users u ON u.id=r.roller_id WHERE r.scenario_id=? AND r.revealed_at IS NOT NULL ORDER BY r.id DESC LIMIT 100',
+                    [$scenarioId],
+                )
+                : [];
         if ($user['role'] !== 'DM') {
             $objects = array_map(
                 fn($o) => [
@@ -145,6 +151,7 @@ final class GameService
         return [
             'scenario' => $s,
             'mapFocus' => $mapFocus,
+            'mapFocusAreas' => $mapFocusAreas,
             'blocked' => $blocked,
             'objects' => $objects,
             'npcs' => $npcs,
@@ -153,6 +160,7 @@ final class GameService
             'participants' => $participants,
             'pendingMovements' => $pending,
             'cellNotes' => $notes,
+            'diceRolls' => $diceRolls,
             'previousEncounterLog' => $previousEncounterLog,
         ];
     }
@@ -303,6 +311,83 @@ final class GameService
         return $row ?: [];
     }
 
+    public function startDiceRoll(int $scenarioId, array $user): array
+    {
+        if (!in_array($user['role'], ['DM', 'PLAYER'], true)) {
+            throw new RuntimeException('Los invitados no pueden lanzar dados.');
+        }
+        return Database::transaction(function () use ($scenarioId, $user) {
+            $scenario = $this->one('SELECT * FROM scenarios WHERE id=? FOR UPDATE', [$scenarioId]);
+            if (!$scenario || !empty($scenario['is_deleted'])) {
+                throw new RuntimeException('Escenario inexistente.');
+            }
+            $this->assertMember((int) $scenario['campaign_id'], (int) $user['id']);
+            if ($user['role'] !== 'DM' && !(bool) $scenario['active']) {
+                throw new RuntimeException('El escenario no está activo.');
+            }
+            $this->db
+                ->prepare(
+                    'DELETE FROM scenario_dice_rolls WHERE scenario_id=? AND revealed_at IS NULL AND created_at<DATE_SUB(NOW(),INTERVAL 10 SECOND)',
+                )
+                ->execute([$scenarioId]);
+            if (
+                $this->one(
+                    'SELECT id FROM scenario_dice_rolls WHERE scenario_id=? AND revealed_at IS NULL LIMIT 1',
+                    [$scenarioId],
+                )
+            ) {
+                throw new RuntimeException('Ya hay un dado rodando.');
+            }
+            $encounter = $this->one(
+                "SELECT round_no FROM encounters WHERE scenario_id=? AND state='RUNNING'",
+                [$scenarioId],
+            );
+            $inCombat = (bool) $encounter;
+            $result = random_int(1, 20);
+            $this->db
+                ->prepare(
+                    'INSERT INTO scenario_dice_rolls(scenario_id,roller_id,result,in_combat,round_no) VALUES (?,?,?,?,?)',
+                )
+                ->execute([
+                    $scenarioId,
+                    $user['id'],
+                    $result,
+                    $inCombat ? 1 : 0,
+                    $inCombat ? (int) $encounter['round_no'] : null,
+                ]);
+            return [
+                'id' => (int) $this->db->lastInsertId(),
+                'scenarioId' => $scenarioId,
+                'rollerName' => (string) $user['name'],
+                'result' => $result,
+                'inCombat' => $inCombat,
+                'roundNo' => $inCombat ? (int) $encounter['round_no'] : null,
+            ];
+        });
+    }
+
+    public function revealDiceRoll(int $rollId): ?array
+    {
+        return Database::transaction(function () use ($rollId) {
+            $roll = $this->one('SELECT id FROM scenario_dice_rolls WHERE id=? FOR UPDATE', [
+                $rollId,
+            ]);
+            if (!$roll) {
+                return null;
+            }
+            $this->db
+                ->prepare(
+                    'UPDATE scenario_dice_rolls SET revealed_at=COALESCE(revealed_at,NOW()) WHERE id=?',
+                )
+                ->execute([$rollId]);
+            return $this->one(
+                'SELECT r.id,r.scenario_id,r.result,r.in_combat,r.round_no,r.created_at,UNIX_TIMESTAMP(r.created_at) created_at_unix,u.name roller_name FROM scenario_dice_rolls r JOIN users u ON u.id=r.roller_id WHERE r.id=?',
+                [$rollId],
+            ) ?:
+                null;
+        });
+    }
+
     public function recordDmView(array $user, int $scenarioId, array $camera): array
     {
         if ($user['role'] !== 'DM') {
@@ -403,6 +488,7 @@ final class GameService
                 'scenario.copy_alive_previous',
                 'map.focus',
                 'map.focus.clear',
+                'dice.roll.delete',
                 'map.cells.paint',
                 'object.create',
                 'objects.bulk_update',
@@ -439,6 +525,7 @@ final class GameService
                 'scenario.copy_alive_previous' => $this->copyAliveFromPreviousScenario($s),
                 'map.focus' => $this->setMapFocus($s, $p),
                 'map.focus.clear' => $this->clearMapFocus($s),
+                'dice.roll.delete' => $this->deleteDiceRoll($s, $p),
                 'map.cells.paint' => $this->paint($s, $p),
                 'cell.note' => $this->cellNote($s, $p),
                 'player.note' => $this->playerNote($s, $p),
@@ -2113,10 +2200,32 @@ final class GameService
         }
         $this->db
             ->prepare(
-                'INSERT INTO scenario_map_focus(scenario_id,x,y,width_cells,height_cells) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE x=VALUES(x),y=VALUES(y),width_cells=VALUES(width_cells),height_cells=VALUES(height_cells)',
+                'INSERT INTO scenario_map_focus(scenario_id,x,y,width_cells,height_cells) VALUES (?,?,?,?,?)',
             )
             ->execute([$s['id'], $x, $y, $w, $h]);
-        return ['x' => $x, 'y' => $y, 'widthCells' => $w, 'heightCells' => $h];
+        return [
+            'id' => (int) $this->db->lastInsertId(),
+            'x' => $x,
+            'y' => $y,
+            'widthCells' => $w,
+            'heightCells' => $h,
+        ];
+    }
+    private function mapFocusBounds(array $areas): ?array
+    {
+        if (!$areas) {
+            return null;
+        }
+        $minX = min(array_map(fn($area) => (int) $area['x'], $areas));
+        $minY = min(array_map(fn($area) => (int) $area['y'], $areas));
+        $maxX = max(array_map(fn($area) => (int) $area['x'] + (int) $area['width_cells'], $areas));
+        $maxY = max(array_map(fn($area) => (int) $area['y'] + (int) $area['height_cells'], $areas));
+        return [
+            'x' => $minX,
+            'y' => $minY,
+            'width_cells' => $maxX - $minX,
+            'height_cells' => $maxY - $minY,
+        ];
     }
     private function clearMapFocus(array $s): array
     {
@@ -2124,6 +2233,18 @@ final class GameService
             ->prepare('DELETE FROM scenario_map_focus WHERE scenario_id=?')
             ->execute([$s['id']]);
         return ['cleared' => true];
+    }
+    private function deleteDiceRoll(array $s, array $p): array
+    {
+        $id = (int) ($p['id'] ?? 0);
+        $delete = $this->db->prepare(
+            'DELETE FROM scenario_dice_rolls WHERE id=? AND scenario_id=? AND revealed_at IS NOT NULL',
+        );
+        $delete->execute([$id, $s['id']]);
+        if ($delete->rowCount() !== 1) {
+            throw new RuntimeException('Lanzamiento inexistente.');
+        }
+        return ['id' => $id, 'deleted' => true];
     }
 
     private function ensurePlayerChat(int $campaignId, int $playerId): array

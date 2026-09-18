@@ -105,8 +105,10 @@
                     <button data-mode="pan">✋ Mover mapa</button>
                     <button data-mode="block">▦ Bloquear casillas</button>
                     <button data-mode="unblock">□ Hacer transitable</button>
-                    <button data-mode="mapfocus">✂ Editar área visible</button>
-                    <button id="clear-map-focus">Quitar área visible</button>
+                    <button id="map-focus-mode" data-mode="mapfocus">
+                      ✂ Hacer visible una parte
+                    </button>
+                    <button id="clear-map-focus">☀ Revelar todo el mapa</button>
                   </div>
                 </details>
                 <details class="tool-group" data-main-tool>
@@ -125,8 +127,11 @@
               ><button id="draw-size-down" data-draw-tool hidden>−</button
               ><span id="draw-size-label" data-draw-tool hidden>Tamaño: 6</span
               ><button id="draw-size-up" data-draw-tool hidden>＋</button
-              ><button id="draw-exit" data-draw-tool hidden>Salir</button> <span class="grow"></span
-              ><button id="zoom-out" aria-label="Alejar mapa">−</button
+              ><button id="draw-exit" data-draw-tool hidden>Salir</button
+              ><button id="roll-d20" class="roller-only" data-main-tool type="button">
+                🎲 d20
+              </button>
+              <span class="grow"></span><button id="zoom-out" aria-label="Alejar mapa">−</button
               ><span id="zoom-label">100%</span
               ><button id="zoom-in" aria-label="Acercar mapa">＋</button>
             </nav>
@@ -215,6 +220,10 @@
               <h2>Chats</h2>
               <div id="dm-chat-list"></div>
             </section>
+            <section id="dice-roll-log-panel" class="panel-section">
+              <h2>Registro de d20</h2>
+              <div id="dice-roll-log"></div>
+            </section>
           </div>
           <details class="panel-accordion player-only" open>
             <summary>
@@ -269,6 +278,16 @@
     </dialog>
     <div id="notification-stack" aria-live="polite"></div>
     <div id="chat-windows"></div>
+    <div id="dice-roll-overlay" role="status" aria-live="assertive" hidden>
+      <div class="dice-roll-card">
+        <p id="dice-roller-name"></p>
+        <div class="d20-stage" aria-hidden="true">
+          <canvas id="dice-roll-canvas"></canvas>
+          <strong id="dice-roll-value">?</strong>
+        </div>
+        <p id="dice-roll-status">Lanzando d20…</p>
+      </div>
+    </div>
     <div id="toast" role="status"></div>
     <script type="module" src="/assets/app.js"></script>
   </body>

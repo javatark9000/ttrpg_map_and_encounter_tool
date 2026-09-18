@@ -104,6 +104,71 @@ try {
         ok(true, 'jugador no ve escenario inactivo');
     }
     $game->command($dm, 'scenario.activate', ['scenarioId' => $scenarioId], req());
+    $game->command(
+        $dm,
+        'map.focus',
+        [
+            'scenarioId' => $scenarioId,
+            'x' => 0,
+            'y' => 0,
+            'widthCells' => 2,
+            'heightCells' => 3,
+        ],
+        req(),
+    );
+    $game->command(
+        $dm,
+        'map.focus',
+        [
+            'scenarioId' => $scenarioId,
+            'x' => 5,
+            'y' => 4,
+            'widthCells' => 2,
+            'heightCells' => 2,
+        ],
+        req(),
+    );
+    $focusSnapshot = $game->snapshot($scenarioId, $player);
+    ok(
+        count($focusSnapshot['mapFocusAreas']) === 2 &&
+            (int) $focusSnapshot['mapFocus']['width_cells'] === 7 &&
+            (int) $focusSnapshot['mapFocus']['height_cells'] === 6,
+        'el DM añade varias áreas visibles sin reemplazar las anteriores',
+    );
+    $game->command($dm, 'map.focus.clear', ['scenarioId' => $scenarioId], req());
+    $revealedSnapshot = $game->snapshot($scenarioId, $player);
+    ok(
+        !$revealedSnapshot['mapFocusAreas'] && $revealedSnapshot['mapFocus'] === null,
+        'revelar todo el mapa elimina todas las restricciones visibles',
+    );
+    $pendingRoll = $game->startDiceRoll($scenarioId, $player);
+    ok(
+        $pendingRoll['result'] >= 1 &&
+            $pendingRoll['result'] <= 20 &&
+            !$pendingRoll['inCombat'] &&
+            !$game->snapshot($scenarioId, $dm)['diceRolls'],
+        'el servidor calcula el d20 fuera de combate sin publicarlo antes de revelarlo',
+    );
+    $revealedRoll = $game->revealDiceRoll((int) $pendingRoll['id']);
+    ok(
+        (int) $revealedRoll['result'] === (int) $pendingRoll['result'] &&
+            count($game->snapshot($scenarioId, $dm)['diceRolls']) === 1 &&
+            !$game->snapshot($scenarioId, $player)['diceRolls'],
+        'solo el DM recibe el registro persistente del lanzamiento revelado',
+    );
+    try {
+        $game->startDiceRoll($scenarioId, $guest);
+        ok(false, 'invitado no puede lanzar dados');
+    } catch (RuntimeException) {
+        ok(true, 'invitado no puede lanzar dados');
+    }
+    $game->command(
+        $dm,
+        'dice.roll.delete',
+        ['scenarioId' => $scenarioId, 'id' => $pendingRoll['id']],
+        req(),
+    );
+    ok(!$game->snapshot($scenarioId, $dm)['diceRolls'], 'el DM elimina un registro de d20');
     ok(
         (bool) array_filter(
             $game->bootstrap($player)['scenarios'],
@@ -402,6 +467,12 @@ try {
     ok($started['data']['state'] === 'RUNNING', 'combate inicia con iniciativas');
     $after = $game->command($dm, 'turn.next', ['scenarioId' => $scenarioId], req());
     ok($after['data']['round'] === 1, 'el DM avanza el turno');
+    $combatRoll = $game->startDiceRoll($scenarioId, $dm);
+    $combatRoll = $game->revealDiceRoll((int) $combatRoll['id']);
+    ok(
+        (bool) $combatRoll['in_combat'] && (int) $combatRoll['round_no'] === 1,
+        'el registro del d20 identifica combate y ronda',
+    );
     try {
         $game->command(
             $player,

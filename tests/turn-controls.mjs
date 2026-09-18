@@ -25,15 +25,25 @@ class Socket {
 }
 const context = vm.createContext({
     state,
+    pendingDiceRequestId: null,
     WebSocket: Socket,
     wsUrl: () => 'ws://test',
-    crypto: { randomUUID: () => `request-${++nextId}` },
+    crypto: {
+        getRandomValues: (bytes) => {
+            bytes.fill(++nextId);
+            return bytes;
+        },
+    },
     $: () => connection,
     $$: () => buttons,
     toast: () => {},
     subscribe: () => sent.push({ action: 'subscribe' }),
     prepareAnimations: () => {},
     fitMapFocusForPlayers: () => {},
+    updateMapFocusControls: () => {},
+    resetDiceAnimation: () => {},
+    handleDiceRollStarted: () => {},
+    handleDiceRollRevealed: () => {},
     renderSidebar: () => {},
     renderDetails: () => {
         renders++;
@@ -44,13 +54,14 @@ const context = vm.createContext({
     setTimeout: () => {},
 });
 vm.runInContext(section('function connectWs()', 'async function syncScenarioList()'), context);
-vm.runInContext(section('function command(type', 'function notifyApp('), context);
+vm.runInContext(section('function generateRequestId()', 'function notifyApp('), context);
 vm.runInContext('connectWs()', context);
 const call = (code) => vm.runInContext(code, context);
 const message = (data) => state.ws.onmessage({ data: JSON.stringify(data) });
 
 call("command('turn.next'); command('turn.next')");
 assert.equal(sent.length, 1, 'double click sends a single command');
+assert.match(sent[0].requestId, /^[a-f0-9]{32}$/, 'HTTP clients receive a fallback request ID');
 assert.equal(sent[0].payload.expectedVersion, 10, 'command includes snapshot version');
 assert.ok(
     buttons.every((b) => b.disabled),

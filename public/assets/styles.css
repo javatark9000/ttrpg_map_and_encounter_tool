@@ -725,29 +725,20 @@ main {
   margin: 0.4rem 0;
   cursor: pointer;
 }
-.request:hover {
+.request:hover,
+.request.previewing {
   outline: 1px solid var(--gold);
+}
+.request.previewing {
+  background: #3d321f;
+  box-shadow: inset 3px 0 var(--gold);
+}
+.request:focus-visible {
+  outline: 2px solid #ffe2a5;
+  outline-offset: 2px;
 }
 .request button {
   margin: 0.2rem;
-}
-.movement-preview {
-  width: 240px;
-  max-width: 240px;
-  pointer-events: auto;
-}
-.movement-preview small {
-  display: block;
-  color: var(--muted);
-  margin: 0.15rem 0 0.35rem;
-}
-.movement-preview canvas {
-  display: block;
-  width: 220px;
-  height: 160px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  opacity: 0.86;
 }
 .token-card {
   padding: 0.6rem;
@@ -983,6 +974,104 @@ main {
   padding: 0.05rem 0.4rem;
   font-size: 0.75rem;
 }
+#dice-roll-log {
+  display: grid;
+  gap: 0.4rem;
+}
+.dice-roll-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.dice-roll-entry .roll-result {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: #5a421d;
+  color: #ffe2a5;
+  font-weight: 800;
+}
+.dice-roll-entry small {
+  display: block;
+  color: var(--muted);
+}
+.dice-roll-delete {
+  min-width: 1.7rem;
+  min-height: 1.7rem;
+  padding: 0;
+  border-color: #a63b36;
+  color: #ff7d75;
+  font-weight: 800;
+}
+#dice-roll-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  pointer-events: none;
+  background: radial-gradient(circle, #0002 0, #0009 75%);
+}
+#dice-roll-overlay[hidden] {
+  display: none;
+}
+.dice-roll-card {
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  width: min(19rem, 88vw);
+  padding: clamp(1rem, 4vw, 1.6rem);
+  border: 1px solid #e8bd68;
+  border-radius: 18px;
+  background: #100d0aed;
+  box-shadow:
+    0 20px 70px #000,
+    inset 0 0 35px #d7aa5218;
+  text-align: center;
+}
+.dice-roll-card p {
+  margin: 0;
+}
+#dice-roller-name {
+  color: #ffe2a5;
+  font-weight: 700;
+}
+#dice-roll-status {
+  color: var(--muted);
+}
+.d20-stage {
+  position: relative;
+  width: clamp(10rem, 38vw, 13rem);
+  aspect-ratio: 1;
+  filter: drop-shadow(0 14px 12px #000b);
+  transition: filter 0.25s ease;
+}
+#dice-roll-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+#dice-roll-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+#dice-roll-overlay.critical .d20-stage {
+  filter: drop-shadow(0 0 25px #ffd76e);
+}
+#dice-roll-overlay.fumble .d20-stage {
+  filter: drop-shadow(0 0 20px #b9433d);
+}
 #toast {
   position: fixed;
   z-index: 20;
@@ -1176,7 +1265,7 @@ legend {
 #menu-btn {
   display: none;
 }
-@media (max-width: 850px) {
+@media (max-width: 850px), (max-height: 500px) and (pointer: coarse) {
   body {
     overflow: hidden;
   }
@@ -1314,6 +1403,32 @@ legend {
   }
   #toolbar button {
     padding: 0.5rem;
+  }
+  .is-player #toolbar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-items: stretch;
+  }
+  .is-player .player-toolbar {
+    display: contents;
+  }
+  .is-player #toolbar button,
+  .is-player #toolbar [data-draw-tool] {
+    min-width: 0;
+    min-height: 42px;
+  }
+  .is-player #toolbar button {
+    width: 100%;
+    overflow: hidden;
+    padding-inline: 0.25rem;
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+  }
+  .is-player #toolbar > .grow,
+  .is-player #zoom-out,
+  .is-player #zoom-label,
+  .is-player #zoom-in {
+    display: none;
   }
   #zoom-label {
     display: none;

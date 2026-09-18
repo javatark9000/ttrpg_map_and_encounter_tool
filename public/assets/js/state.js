@@ -27,6 +27,8 @@ export const state = {
   viewPublishTimer: null,
   cloneSource: null,
   lastPendingRequestIds: new Set(),
+  selectedMovementPreview: null,
+  hoveredMovementPreview: null,
   chatThreads: [],
   openChats: new Map(),
   lastTap: null,

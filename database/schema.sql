@@ -117,13 +117,15 @@ CREATE TABLE blocked_cells (
 ) ENGINE=InnoDB;
 
 CREATE TABLE scenario_map_focus (
- scenario_id BIGINT UNSIGNED PRIMARY KEY,
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ scenario_id BIGINT UNSIGNED NOT NULL,
  x INT UNSIGNED NOT NULL,
  y INT UNSIGNED NOT NULL,
  width_cells INT UNSIGNED NOT NULL,
  height_cells INT UNSIGNED NOT NULL,
  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
- FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE
+ FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE,
+ INDEX(scenario_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE cell_notes (
@@ -275,6 +277,21 @@ CREATE TABLE encounter_health_log (
  FOREIGN KEY (encounter_id) REFERENCES encounters(id) ON DELETE CASCADE,
  INDEX(encounter_id,id),
  INDEX(encounter_id,actor_type,actor_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE scenario_dice_rolls (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ scenario_id BIGINT UNSIGNED NOT NULL,
+ roller_id BIGINT UNSIGNED NOT NULL,
+ result TINYINT UNSIGNED NOT NULL,
+ in_combat BOOLEAN NOT NULL DEFAULT FALSE,
+ round_no INT UNSIGNED NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ revealed_at TIMESTAMP NULL,
+ FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE,
+ FOREIGN KEY (roller_id) REFERENCES users(id) ON DELETE CASCADE,
+ INDEX(scenario_id,id),
+ INDEX(scenario_id,revealed_at)
 ) ENGINE=InnoDB;
 
 CREATE TABLE movement_requests (

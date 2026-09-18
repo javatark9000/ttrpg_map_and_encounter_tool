@@ -10,6 +10,10 @@ import { openNpcCreatureInfo } from './js/codex.js';
 import { state } from './js/state.js';
 
 const DRAW_POINT_MIN_DISTANCE = 0.18;
+let diceHideTimer = null,
+  diceAnimationFrame = null,
+  diceRenderState = null,
+  pendingDiceRequestId = null;
 function displayHp(v, t = null) {
   return Math.max(t?.kind === 'PLAYER' || t?.actor_type === 'PLAYER' ? -10 : 0, Number(v ?? 0));
 }
@@ -79,6 +83,7 @@ async function start() {
   $('#app').hidden = false;
   $('#user-label').textContent = `${me.user.name} · ${me.user.role}`;
   document.body.classList.toggle('is-dm', me.user.role === 'DM');
+  document.body.classList.toggle('is-player', me.user.role === 'PLAYER');
   document.body.classList.toggle('is-guest', me.user.role === 'GUEST');
   $$('.dm-only').forEach((e) => (e.hidden = me.user.role !== 'DM'));
   $$('.player-only').forEach((e) => (e.hidden = me.user.role !== 'PLAYER'));
@@ -262,6 +267,8 @@ function connectWs() {
   };
   ws.onclose = () => {
     clearInterval(ws._beat);
+    pendingDiceRequestId = null;
+    resetDiceAnimation();
     state.pendingTurn = null;
     updateTurnControls();
     $('#connection').textContent = 'offline';
@@ -276,9 +283,15 @@ function connectWs() {
     else if (m.type === 'dm.view.changed') await followDmView(m);
     else if (m.type === 'chat.message') handleChatMessage(m.data);
     else if (m.type === 'draw.event') handleDrawEvent(m.data);
+    else if (m.type === 'dice.roll.started') handleDiceRollStarted(m);
+    else if (m.type === 'dice.roll.revealed') handleDiceRollRevealed(m.data);
     else if (m.type === 'command.accepted' && m.requestId === state.pendingTurn?.requestId) {
       state.pendingTurn.version = +m.event.version;
     } else if (m.type === 'command.error') {
+      if (m.requestId === pendingDiceRequestId) {
+        pendingDiceRequestId = null;
+        $('#roll-d20').disabled = false;
+      }
       if (m.requestId === state.pendingTurn?.requestId) {
         state.pendingTurn = null;
         updateTurnControls();
@@ -316,6 +329,7 @@ async function openScenario(id) {
   if (state.user.role === 'DM' && isMobileLayout())
     document.body.classList.add('right-panel-collapsed');
   state.scenarioId = +id;
+  resetDiceAnimation();
   state.path = [];
   state.drawings = [];
   state.drawStroke = null;
@@ -323,6 +337,8 @@ async function openScenario(id) {
   state.selectedNpcs.clear();
   state.selectedPlayers.clear();
   state.lastPendingRequestIds = new Set();
+  state.selectedMovementPreview = null;
+  state.hoveredMovementPreview = null;
   state.chatThreads = [];
   state.openChats.clear();
   $('#chat-windows').innerHTML = '';
@@ -341,6 +357,7 @@ async function openScenario(id) {
     try {
       state.data = await api(`/scenarios/${id}/snapshot`);
       fitMapFocusForPlayers();
+      updateMapFocusControls();
       renderSidebar();
       renderDetails();
       draw();
@@ -399,13 +416,22 @@ function publishDmView() {
     80,
   );
 }
+function generateRequestId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function')
+    return globalThis.crypto.randomUUID().replaceAll('-', '');
+  const bytes = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues === 'function')
+    globalThis.crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index++) bytes[index] = Math.random() * 256;
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 function command(type, payload = {}) {
   if (state.ws?.readyState !== 1) {
     toast('Sin conexión');
     return;
   }
   const turnCommand = type.startsWith('turn.') || type.startsWith('encounter.');
-  const requestId = crypto.randomUUID().replaceAll('-', '');
+  const requestId = generateRequestId();
   if (turnCommand) {
     if (state.pendingTurn || !state.data) return;
     payload = { ...payload, expectedVersion: +state.data.scenario.version };
@@ -440,7 +466,11 @@ function handleSnapshot(data) {
   prepareAnimations(state.data, data);
   const prev = state.lastPendingRequestIds;
   state.data = data;
+  const pendingMovementIds = new Set((data.pendingMovements || []).map((item) => +item.id));
+  if (!pendingMovementIds.has(+state.selectedMovementPreview)) state.selectedMovementPreview = null;
+  if (!pendingMovementIds.has(+state.hoveredMovementPreview)) state.hoveredMovementPreview = null;
   fitMapFocusForPlayers();
+  updateMapFocusControls();
   renderSidebar();
   renderDetails();
   draw();
@@ -561,6 +591,360 @@ function renderChatWindow(win, messages) {
     )
     .join('');
   box.scrollTop = box.scrollHeight;
+}
+const D20_VERTICES = (() => {
+  const phi = (1 + Math.sqrt(5)) / 2;
+  return [
+    [-1, phi, 0],
+    [1, phi, 0],
+    [-1, -phi, 0],
+    [1, -phi, 0],
+    [0, -1, phi],
+    [0, 1, phi],
+    [0, -1, -phi],
+    [0, 1, -phi],
+    [phi, 0, -1],
+    [phi, 0, 1],
+    [-phi, 0, -1],
+    [-phi, 0, 1],
+  ].map(normalizeVector);
+})();
+const D20_FACES = [
+  [0, 11, 5],
+  [0, 5, 1],
+  [0, 1, 7],
+  [0, 7, 10],
+  [0, 10, 11],
+  [1, 5, 9],
+  [5, 11, 4],
+  [11, 10, 2],
+  [10, 7, 6],
+  [7, 1, 8],
+  [3, 9, 4],
+  [3, 4, 2],
+  [3, 2, 6],
+  [3, 6, 8],
+  [3, 8, 9],
+  [4, 9, 5],
+  [2, 4, 11],
+  [6, 2, 10],
+  [8, 6, 7],
+  [9, 8, 1],
+].map((indices) => {
+  const center = indices.reduce((sum, index) => addVector(sum, D20_VERTICES[index]), [0, 0, 0]);
+  const normal = faceNormal(indices.map((index) => D20_VERTICES[index]));
+  if (dotVector(center, normal) < 0) indices = [indices[0], indices[2], indices[1]];
+  return { indices, normal: faceNormal(indices.map((index) => D20_VERTICES[index])) };
+});
+function addVector(a, b) {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+function subtractVector(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+function crossVector(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function dotVector(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function normalizeVector(vector) {
+  const length = Math.hypot(...vector) || 1;
+  return vector.map((value) => value / length);
+}
+function faceNormal(vertices) {
+  return normalizeVector(
+    crossVector(subtractVector(vertices[1], vertices[0]), subtractVector(vertices[2], vertices[0])),
+  );
+}
+function multiplyMatrix(a, b) {
+  const result = Array(9).fill(0);
+  for (let row = 0; row < 3; row++)
+    for (let column = 0; column < 3; column++)
+      for (let index = 0; index < 3; index++)
+        result[row * 3 + column] += a[row * 3 + index] * b[index * 3 + column];
+  return result;
+}
+function transformVector(matrix, vector) {
+  return [
+    matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2],
+    matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2],
+    matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2],
+  ];
+}
+function rotationMatrix(axis, angle) {
+  const [x, y, z] = normalizeVector(axis),
+    cosine = Math.cos(angle),
+    sine = Math.sin(angle),
+    complement = 1 - cosine;
+  return [
+    cosine + x * x * complement,
+    x * y * complement - z * sine,
+    x * z * complement + y * sine,
+    y * x * complement + z * sine,
+    cosine + y * y * complement,
+    y * z * complement - x * sine,
+    z * x * complement - y * sine,
+    z * y * complement + x * sine,
+    cosine + z * z * complement,
+  ];
+}
+function rollingDiceMatrix(seconds) {
+  return multiplyMatrix(
+    rotationMatrix([0, 0, 1], seconds * 4.1),
+    multiplyMatrix(
+      rotationMatrix([0, 1, 0], seconds * 7.3),
+      rotationMatrix([1, 0, 0], seconds * 5.7),
+    ),
+  );
+}
+function shadeColor(color, amount) {
+  return `rgb(${color.map((component) => Math.round(Math.min(255, component * amount))).join(' ')})`;
+}
+function drawD20(matrix, { lift = 0, scale = 1, result = null } = {}) {
+  const canvas = $('#dice-roll-canvas'),
+    context = canvas?.getContext('2d'),
+    bounds = canvas?.getBoundingClientRect();
+  if (!context || !bounds?.width) return;
+  const ratio = Math.min(devicePixelRatio || 1, 2),
+    width = bounds.width,
+    height = bounds.height;
+  if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+  }
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  const centerX = width / 2,
+    centerY = height / 2 - lift,
+    radius = Math.min(width, height) * 0.37 * scale,
+    cameraDistance = 3.7,
+    transformed = D20_VERTICES.map((vertex) => transformVector(matrix, vertex)),
+    project = (point) => {
+      const perspective = cameraDistance / (cameraDistance - point[2]);
+      return {
+        x: centerX + point[0] * radius * perspective,
+        y: centerY - point[1] * radius * perspective,
+      };
+    },
+    projected = transformed.map(project),
+    light = normalizeVector([-0.45, 0.7, 1]);
+  context.save();
+  context.globalAlpha = 0.5;
+  context.filter = 'blur(7px)';
+  context.fillStyle = '#000';
+  context.beginPath();
+  context.ellipse(centerX, height * 0.87, radius * 0.72, radius * 0.15, 0, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+  const visibleFaces = D20_FACES.map((face, index) => {
+    const vertices = face.indices.map((vertexIndex) => transformed[vertexIndex]),
+      normal = faceNormal(vertices);
+    return {
+      ...face,
+      index,
+      vertices,
+      normal,
+      depth: vertices.reduce((sum, vertex) => sum + vertex[2], 0) / 3,
+    };
+  })
+    .filter((face) => face.normal[2] > -0.03)
+    .sort((a, b) => a.depth - b.depth);
+  const baseColor = result === 1 ? [133, 48, 43] : result === 20 ? [211, 164, 62] : [173, 108, 42];
+  visibleFaces.forEach((face) => {
+    const points = face.indices.map((index) => projected[index]),
+      brightness = 0.38 + Math.max(0, dotVector(face.normal, light)) * 0.72,
+      variation = 0.92 + (face.index % 3) * 0.05,
+      gradient = context.createLinearGradient(points[0].x, points[0].y, points[2].x, points[2].y);
+    gradient.addColorStop(0, shadeColor(baseColor, Math.min(1.45, brightness * 1.25 * variation)));
+    gradient.addColorStop(1, shadeColor(baseColor, Math.max(0.3, brightness * 0.7 * variation)));
+    context.beginPath();
+    points.forEach((point, index) =>
+      index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y),
+    );
+    context.closePath();
+    context.fillStyle = gradient;
+    context.fill();
+    context.strokeStyle = result === 1 ? '#d9857e' : '#f5d98e';
+    context.lineWidth = Math.max(1, width * 0.007);
+    context.stroke();
+    if (face.normal[2] < 0.1) return;
+    const center = project(
+        face.vertices
+          .reduce((sum, vertex) => addVector(sum, vertex), [0, 0, 0])
+          .map((value) => value / 3),
+      ),
+      isResult = result === face.index + 1 && face.normal[2] > 0.82,
+      edgeAngle = Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x),
+      uprightAngle = Math.cos(edgeAngle) < 0 ? edgeAngle + Math.PI : edgeAngle;
+    context.save();
+    context.translate(center.x, center.y);
+    context.rotate(uprightAngle);
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = `800 ${Math.max(9, width * (isResult ? 0.15 : 0.065))}px Georgia, serif`;
+    context.lineJoin = 'round';
+    context.lineWidth = isResult ? 4 : 2.5;
+    context.strokeStyle = '#2c160b';
+    context.fillStyle = '#fff7dc';
+    context.strokeText(String(face.index + 1), 0, 1);
+    context.fillText(String(face.index + 1), 0, 1);
+    context.restore();
+  });
+}
+function stopD20Animation() {
+  if (diceAnimationFrame != null) cancelAnimationFrame(diceAnimationFrame);
+  diceAnimationFrame = null;
+  diceRenderState = null;
+}
+function startD20Animation() {
+  stopD20Animation();
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches,
+    startedAt = performance.now();
+  diceRenderState = { matrix: rollingDiceMatrix(0), result: null };
+  const frame = (now) => {
+    const elapsed = (now - startedAt) / 1000,
+      matrix = reducedMotion ? rollingDiceMatrix(0.35) : rollingDiceMatrix(elapsed);
+    diceRenderState.matrix = matrix;
+    drawD20(matrix, {
+      lift: reducedMotion ? 0 : Math.abs(Math.sin(elapsed * 7.5)) * 8,
+      scale: reducedMotion ? 1 : 0.97 + Math.sin(elapsed * 10) * 0.03,
+    });
+    if (!reducedMotion) diceAnimationFrame = requestAnimationFrame(frame);
+  };
+  frame(startedAt);
+}
+function landD20(result) {
+  const startMatrix = diceRenderState?.matrix || rollingDiceMatrix(0),
+    face = D20_FACES[result - 1],
+    worldNormal = transformVector(startMatrix, face.normal),
+    targetNormal = [0, 0, 1],
+    cross = crossVector(worldNormal, targetNormal),
+    crossLength = Math.hypot(...cross),
+    axis = crossLength < 0.0001 ? [1, 0, 0] : cross.map((value) => value / crossLength),
+    angle = Math.acos(Math.max(-1, Math.min(1, dotVector(worldNormal, targetNormal)))),
+    startedAt = performance.now(),
+    duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 520;
+  if (diceAnimationFrame != null) cancelAnimationFrame(diceAnimationFrame);
+  diceRenderState = { matrix: startMatrix, result };
+  const frame = (now) => {
+    const progress = duration ? Math.min(1, (now - startedAt) / duration) : 1,
+      eased = 1 - Math.pow(1 - progress, 3),
+      matrix = multiplyMatrix(rotationMatrix(axis, angle * eased), startMatrix);
+    diceRenderState.matrix = matrix;
+    drawD20(matrix, {
+      lift: Math.sin(progress * Math.PI) * 12,
+      scale: 1 + Math.sin(progress * Math.PI) * 0.08,
+      result,
+    });
+    if (progress < 1) diceAnimationFrame = requestAnimationFrame(frame);
+    else diceAnimationFrame = null;
+  };
+  frame(startedAt);
+}
+function handleDiceRollStarted(message) {
+  if (+message.scenarioId !== +state.scenarioId) return;
+  pendingDiceRequestId = null;
+  clearTimeout(diceHideTimer);
+  const overlay = $('#dice-roll-overlay'),
+    duration = +message.durationMs || 1500;
+  overlay.hidden = false;
+  overlay.className = 'rolling';
+  overlay.dataset.rollId = String(message.rollId);
+  startD20Animation();
+  $('#dice-roller-name').textContent = `${message.rollerName} lanza un d20`;
+  $('#dice-roll-status').textContent = 'Lanzando…';
+  $('#dice-roll-value').textContent = '?';
+  $('#roll-d20').disabled = true;
+  diceHideTimer = setTimeout(() => {
+    resetDiceAnimation();
+    toast('No se pudo revelar el resultado del dado.');
+  }, duration + 5000);
+}
+function handleDiceRollRevealed(roll) {
+  if (+roll.scenario_id !== +state.scenarioId) return;
+  const overlay = $('#dice-roll-overlay');
+  if (+overlay.dataset.rollId !== +roll.id) return;
+  clearTimeout(diceHideTimer);
+  diceHideTimer = null;
+  const result = +roll.result;
+  overlay.className = `revealed${result === 20 ? ' critical' : result === 1 ? ' fumble' : ''}`;
+  $('#dice-roll-value').textContent = String(result);
+  $('#dice-roll-status').textContent =
+    result === 20 ? '¡20, crítico!' : result === 1 ? '¡1, pifia!' : `Resultado: ${result}`;
+  landD20(result);
+  if (state.user?.role === 'DM' && state.data) {
+    state.data.diceRolls ||= [];
+    if (!state.data.diceRolls.some((item) => +item.id === +roll.id))
+      state.data.diceRolls.unshift(roll);
+    renderDiceRollLog();
+  }
+  diceHideTimer = setTimeout(resetDiceAnimation, 2200);
+}
+function resetDiceAnimation() {
+  clearTimeout(diceHideTimer);
+  diceHideTimer = null;
+  stopD20Animation();
+  const overlay = $('#dice-roll-overlay');
+  if (overlay) {
+    overlay.hidden = true;
+    overlay.className = '';
+    delete overlay.dataset.rollId;
+  }
+  const button = $('#roll-d20');
+  if (button) button.disabled = false;
+}
+$('#roll-d20').onclick = () => {
+  if (!state.scenarioId || state.ws?.readyState !== 1 || pendingDiceRequestId) {
+    toast('No se puede lanzar el dado ahora.');
+    return;
+  }
+  pendingDiceRequestId = generateRequestId();
+  $('#roll-d20').disabled = true;
+  state.ws.send(
+    JSON.stringify({
+      action: 'dice.roll',
+      scenarioId: state.scenarioId,
+      requestId: pendingDiceRequestId,
+    }),
+  );
+};
+function formatCostaRicaTime(roll) {
+  const date = roll.created_at_unix
+    ? new Date(+roll.created_at_unix * 1000)
+    : new Date(String(roll.created_at || '').replace(' ', 'T') + 'Z');
+  if (Number.isNaN(date.getTime())) return String(roll.created_at || '');
+  return new Intl.DateTimeFormat('es-CR', {
+    timeZone: 'America/Costa_Rica',
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(date);
+}
+function renderDiceRollLog() {
+  const list = $('#dice-roll-log');
+  if (!list || state.user?.role !== 'DM') return;
+  const rolls = state.data?.diceRolls || [];
+  list.innerHTML = rolls.length
+    ? rolls
+        .map(
+          (roll) =>
+            `<div class="dice-roll-entry"><span class="roll-result">${+roll.result}</span><div><strong>${esc(roll.roller_name)}</strong><small>${+roll.in_combat ? `En combate${roll.round_no ? ` · Ronda ${+roll.round_no}` : ''}` : 'Fuera de combate'} · Hora CR: ${esc(formatCostaRicaTime(roll))}</small></div><button type="button" class="dice-roll-delete" data-roll-delete="${+roll.id}" aria-label="Eliminar lanzamiento de ${esc(roll.roller_name)}">×</button></div>`,
+        )
+        .join('')
+    : '<p class="muted">Todavía no hay lanzamientos.</p>';
+  list.querySelectorAll('[data-roll-delete]').forEach(
+    (button) =>
+      (button.onclick = async () => {
+        const roll = rolls.find((item) => +item.id === +button.dataset.rollDelete);
+        const accepted = await openForm({
+          title: 'Eliminar lanzamiento',
+          description: `¿Seguro que quieres eliminar el resultado de ${roll?.roller_name || 'este lanzamiento'}?`,
+          submitText: 'Sí, eliminar',
+          danger: true,
+        });
+        if (accepted) command('dice.roll.delete', { id: +button.dataset.rollDelete });
+      }),
+  );
 }
 function handleChatMessage(msg) {
   loadChatThreads().catch(() => {});
@@ -750,64 +1134,32 @@ function renderRoundOrder() {
     : '<li class="muted">No hay fichas incluidas en el encounter.</li>';
 }
 
-function movementPathPreview(m, anchor) {
-  let path = [];
+function movementRequestPath(request) {
   try {
-    path = typeof m.path === 'string' ? JSON.parse(m.path) : m.path || [];
-  } catch {}
-  if (!path.length) return;
-  $('.movement-preview')?.remove();
-  const player = state.data.players.find((p) => +p.id === +m.scenario_player_id),
-    points = [
-      player ? { x: +player.x, y: +player.y } : path[0],
-      ...path.map((c) => ({ x: +c.x, y: +c.y })),
-    ],
-    xs = points.map((p) => p.x),
-    ys = points.map((p) => p.y),
-    minX = Math.min(...xs),
-    maxX = Math.max(...xs),
-    minY = Math.min(...ys),
-    maxY = Math.max(...ys),
-    w = maxX - minX + 1,
-    h = maxY - minY + 1,
-    box = document.createElement('div'),
-    canvas = document.createElement('canvas'),
-    cw = 220,
-    ch = 160,
-    pad = 18,
-    scale = Math.min((cw - pad * 2) / Math.max(1, w), (ch - pad * 2) / Math.max(1, h));
-  canvas.width = cw;
-  canvas.height = ch;
-  box.className = 'movement-preview floating';
-  box.innerHTML = `<strong>${esc(m.character_name || m.user_name)}</strong><small>${points.length - 1} paso${points.length - 1 === 1 ? '' : 's'} solicitados</small>`;
-  box.append(canvas);
-  document.body.append(box);
-  const ctx = canvas.getContext('2d'),
-    sx = (x) => pad + (x - minX + 0.5) * scale,
-    sy = (y) => pad + (y - minY + 0.5) * scale;
-  ctx.fillStyle = '#100d0ae8';
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.strokeStyle = '#d7aa5233';
-  ctx.lineWidth = 1;
-  for (let x = minX; x <= maxX; x++)
-    for (let y = minY; y <= maxY; y++)
-      ctx.strokeRect(pad + (x - minX) * scale, pad + (y - minY) * scale, scale, scale);
-  ctx.strokeStyle = '#58aee4aa';
-  ctx.lineWidth = Math.max(4, scale * 0.16);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  points.forEach((p, i) => (i ? ctx.lineTo(sx(p.x), sy(p.y)) : ctx.moveTo(sx(p.x), sy(p.y))));
-  ctx.stroke();
-  points.forEach((p, i) => {
-    ctx.fillStyle = i === 0 ? '#5d9c63cc' : i === points.length - 1 ? '#d7aa52dd' : '#58aee488';
-    ctx.beginPath();
-    ctx.arc(sx(p.x), sy(p.y), Math.max(4, scale * 0.18), 0, Math.PI * 2);
-    ctx.fill();
+    const path = typeof request.path === 'string' ? JSON.parse(request.path) : request.path || [];
+    return Array.isArray(path) ? path : [];
+  } catch {
+    return [];
+  }
+}
+function previewedMovementRequest() {
+  if (state.user?.role !== 'DM') return null;
+  const id = state.hoveredMovementPreview || state.selectedMovementPreview;
+  return (state.data?.pendingMovements || []).find((request) => +request.id === +id) || null;
+}
+function setMovementPathPreview(id, persistent = false) {
+  if (persistent) {
+    state.selectedMovementPreview = +state.selectedMovementPreview === +id ? null : +id;
+    renderDetails();
+    return;
+  }
+  state.hoveredMovementPreview = id == null ? null : +id;
+  $$('#movement-requests .request').forEach((element) => {
+    const selected = +element.dataset.movementId === +state.selectedMovementPreview;
+    element.classList.toggle('previewing', selected);
+    element.setAttribute('aria-pressed', String(selected));
   });
-  const r = anchor.getBoundingClientRect();
-  box.style.left = Math.max(8, Math.min(innerWidth - 250, r.left - 235)) + 'px';
-  box.style.top = Math.max(8, Math.min(innerHeight - 210, r.top)) + 'px';
+  draw();
 }
 function renderDetails() {
   const d = state.data,
@@ -833,22 +1185,29 @@ function renderDetails() {
   renderPlayerHp();
   renderEncounterBar();
   renderRoundOrder();
+  renderDiceRollLog();
   const req = $('#movement-requests');
   req.innerHTML = '';
-  $('.movement-preview')?.remove();
   d.pendingMovements.forEach((m) => {
-    const x = document.createElement('div');
-    x.className = 'request';
-    x.innerHTML = `<strong>${esc(m.user_name)}${m.character_name ? ` · ${esc(m.character_name)}` : ''}</strong><br><small>${esc(m.reason || 'Requiere revisión')}</small><br><button data-a>✓ Aprobar</button><button data-r>✕ Rechazar</button>`;
+    const x = document.createElement('div'),
+      selected = +state.selectedMovementPreview === +m.id;
+    x.className = `request${selected ? ' previewing' : ''}`;
+    x.dataset.movementId = String(m.id);
+    x.setAttribute('role', 'button');
+    x.setAttribute('tabindex', '0');
+    x.setAttribute('aria-pressed', String(selected));
+    x.innerHTML = `<strong>${esc(m.user_name)}${m.character_name ? ` · ${esc(m.character_name)}` : ''}</strong><br><small>${esc(m.reason || 'Requiere revisión')} · Toca para ${selected ? 'ocultar' : 'ver'} la ruta en el mapa</small><br><button data-a>✓ Aprobar</button><button data-r>✕ Rechazar</button>`;
     x.onclick = (e) => {
-      if (e.target.closest('button')) return;
-      movementPathPreview(m, x);
+      if (!e.target.closest('button')) setMovementPathPreview(m.id, true);
     };
-    x.onmouseenter = () => movementPathPreview(m, x);
-    x.onmouseleave = () =>
-      setTimeout(() => {
-        if (!$('.movement-preview:hover')) $('.movement-preview')?.remove();
-      }, 120);
+    x.onkeydown = (e) => {
+      if (['Enter', ' '].includes(e.key)) {
+        e.preventDefault();
+        setMovementPathPreview(m.id, true);
+      }
+    };
+    x.onmouseenter = () => setMovementPathPreview(m.id);
+    x.onmouseleave = () => setMovementPathPreview(null);
     x.querySelector('[data-a]').onclick = (e) => {
       e.stopPropagation();
       command('movement.approve', { movementId: +m.id });
@@ -1020,6 +1379,17 @@ function resize() {
   fitMapFocusForPlayers();
   draw();
 }
+function mapFocusAreas() {
+  if (Array.isArray(state.data?.mapFocusAreas)) return state.data.mapFocusAreas;
+  return state.data?.mapFocus ? [state.data.mapFocus] : [];
+}
+function updateMapFocusControls() {
+  const button = $('#map-focus-mode');
+  if (!button || state.user?.role !== 'DM') return;
+  button.textContent = mapFocusAreas().length
+    ? '✂ Añadir más visibilidad'
+    : '✂ Hacer visible una parte';
+}
 function fitMapFocusForPlayers() {
   const f = state.data?.mapFocus;
   if (!f || state.user?.role === 'DM') return;
@@ -1067,7 +1437,18 @@ function draw() {
   const s = state.data.scenario,
     z = state.camera.z,
     cs = cellSize * z,
-    origin = worldToScreen(0, 0);
+    origin = worldToScreen(0, 0),
+    focusAreas = mapFocusAreas(),
+    restrictVisibility = state.user?.role !== 'DM' && focusAreas.length > 0;
+  if (restrictVisibility) {
+    ctx.save();
+    ctx.beginPath();
+    focusAreas.forEach((area) => {
+      const p = worldToScreen(+area.x, +area.y);
+      ctx.rect(p.x, p.y, +area.width_cells * cs, +area.height_cells * cs);
+    });
+    ctx.clip();
+  }
   if (s.background_asset_id) {
     const img = image(+s.background_asset_id);
     if (img.complete) ctx.drawImage(img, origin.x, origin.y, +s.width * cs, +s.height * cs);
@@ -1095,7 +1476,7 @@ function draw() {
     ctx.lineTo(origin.x + s.width * cs, p.y);
   }
   ctx.stroke();
-  if (state.data.mapFocus && state.user?.role === 'DM') drawMapFocusBorder(cs);
+  if (focusAreas.length && state.user?.role === 'DM') drawMapFocusBorders(cs);
   if (state.objectDraft) drawObjectDraft(cs);
   if (state.selectionDraft) drawSelectionDraft(cs);
   state.path.forEach((c, i) => {
@@ -1106,11 +1487,13 @@ function draw() {
     ctx.font = `${Math.max(10, 14 * z)}px sans-serif`;
     ctx.fillText(String(i + 1), p.x + 5, p.y + 17 * z);
   });
+  drawPendingMovementPath(cs);
   state.data.objects.forEach((object) => drawMapObject({ ...object, kind: 'OBJECT' }, cs));
   const groups = groupTokens();
   for (const [, tokens] of groups) drawGroup(tokens, cs);
   drawFreehand();
   drawVisibilityEffects(cs);
+  if (restrictVisibility) ctx.restore();
 }
 function fallbackDrawingColor(seed) {
   const palette = [
@@ -1138,6 +1521,77 @@ function currentDrawingColor() {
     if (ch?.drawing_color) return ch.drawing_color;
   }
   return fallbackDrawingColor(state.user?.id);
+}
+function drawPendingMovementPath(cs) {
+  const request = previewedMovementRequest();
+  if (!request) return;
+  const path = movementRequestPath(request);
+  if (!path.length) return;
+  const player = state.data.players.find((item) => +item.id === +request.scenario_player_id),
+    selectedColor = player?.token_color,
+    color =
+      selectedColor && selectedColor !== 'transparent'
+        ? selectedColor
+        : drawingColorForToken(player),
+    points = [
+      player ? { x: +player.x, y: +player.y } : { x: +path[0].x, y: +path[0].y },
+      ...path.map((cell) => ({ x: +cell.x, y: +cell.y })),
+    ],
+    centers = points.map((cell) => worldToScreen(cell.x + 0.5, cell.y + 0.5));
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  path.forEach((cell) => {
+    const p = worldToScreen(+cell.x, +cell.y);
+    ctx.globalAlpha = 0.2;
+    ctx.fillStyle = color;
+    ctx.fillRect(p.x + 3, p.y + 3, cs - 6, cs - 6);
+  });
+  ctx.globalAlpha = 0.72;
+  ctx.strokeStyle = '#090706';
+  ctx.lineWidth = Math.max(7, cs * 0.16);
+  ctx.beginPath();
+  centers.forEach((point, index) =>
+    index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y),
+  );
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = Math.max(8, cs * 0.18);
+  ctx.lineWidth = Math.max(4, cs * 0.09);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  centers.forEach((point, index) => {
+    const end = index === centers.length - 1;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, Math.max(6, cs * (end ? 0.16 : 0.11)), 0, Math.PI * 2);
+    ctx.fillStyle = end ? color : '#17130f';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, cs * 0.04);
+    ctx.stroke();
+    if (index > 0) {
+      ctx.fillStyle = end ? '#17130f' : '#ffffff';
+      ctx.font = `bold ${Math.max(10, cs * 0.18)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(index), point.x, point.y);
+    }
+  });
+  const destination = centers.at(-1);
+  ctx.font = `bold ${Math.max(11, cs * 0.2)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = '#000';
+  ctx.shadowBlur = 5;
+  ctx.fillText(
+    request.character_name || request.user_name || 'Movimiento pendiente',
+    destination.x,
+    destination.y - Math.max(10, cs * 0.2),
+  );
+  ctx.restore();
 }
 function drawFreehand() {
   ctx.save();
@@ -1168,15 +1622,16 @@ function objectDraftArea() {
     heightCells: Math.abs(a.y - b.y) + 1,
   };
 }
-function drawMapFocusBorder(cs) {
-  const f = state.data.mapFocus,
-    p = worldToScreen(+f.x, +f.y);
+function drawMapFocusBorders(cs) {
   ctx.save();
   ctx.strokeStyle = '#fff36b';
   ctx.lineWidth = Math.max(3, cs * 0.07);
   ctx.shadowColor = '#fff36b';
   ctx.shadowBlur = 18;
-  ctx.strokeRect(p.x, p.y, +f.width_cells * cs, +f.height_cells * cs);
+  mapFocusAreas().forEach((area) => {
+    const p = worldToScreen(+area.x, +area.y);
+    ctx.strokeRect(p.x, p.y, +area.width_cells * cs, +area.height_cells * cs);
+  });
   ctx.restore();
 }
 function drawObjectDraft(cs) {
@@ -1627,7 +2082,12 @@ function setMode(m) {
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', x.dataset.mode === m));
   if (m !== 'path') state.path = [];
   if (m === 'object') toast('Arrastra sobre el mapa para definir el área del objeto');
-  if (m === 'mapfocus') toast('Arrastra para elegir la parte del mapa que verán los jugadores');
+  if (m === 'mapfocus')
+    toast(
+      mapFocusAreas().length
+        ? 'Arrastra para añadir otra parte visible para los jugadores'
+        : 'Arrastra para elegir la parte del mapa que verán los jugadores',
+    );
   if (m === 'select')
     toast(
       'Arrastra o toca para alternar selección; lo seleccionado se mantiene mientras sigas en Seleccionar',
@@ -1692,7 +2152,37 @@ $('#draw-size-up').onclick = () => {
 $('#draw-clear-all').onclick = () => {
   if (confirm('¿Borrar todos los dibujos del mapa?')) sendDraw({ op: 'clearAll' });
 };
-$('#clear-map-focus').onclick = () => command('map.focus.clear');
+$('#clear-map-focus').onclick = async () => {
+  if (!mapFocusAreas().length) {
+    toast('El mapa completo ya está revelado');
+    return;
+  }
+  const confirmed = await openForm({
+    title: 'Revelar todo el mapa',
+    description: '¿Seguro que quieres que los jugadores puedan ver el mapa completo?',
+    submitText: 'Sí, revelar todo',
+  });
+  if (confirmed) command('map.focus.clear');
+};
+async function confirmMapFocusArea(area) {
+  const confirmed = await openForm({
+    title: mapFocusAreas().length ? 'Añadir área visible' : 'Revelar área',
+    description: `¿Seguro que quieres revelar esta área de ${area.widthCells} × ${area.heightCells} casillas?`,
+    submitText: 'Sí, revelar área',
+  });
+  state.selectionDraft = null;
+  draw();
+  if (!confirmed) {
+    toast('Área descartada. Puedes dibujarla de nuevo.');
+    return;
+  }
+  command('map.focus', {
+    x: area.x,
+    y: area.y,
+    widthCells: area.widthCells,
+    heightCells: area.heightCells,
+  });
+}
 $('#zoom-in').onclick = () => zoomAt(1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
 $('#zoom-out').onclick = () => zoomAt(1 / 1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
 function zoomAt(f, x, y) {
@@ -1870,18 +2360,17 @@ canvas.onpointerup = (e) => {
     if (area) void createObjectArea(area);
   } else if (selection && ['select', 'mapfocus'].includes(mode)) {
     const area = selectionDraftArea();
-    state.selectionDraft = null;
     if (mode === 'mapfocus') {
-      if (was?.moved && area)
-        command('map.focus', {
-          x: area.x,
-          y: area.y,
-          widthCells: area.widthCells,
-          heightCells: area.heightCells,
-        });
-      draw();
-    } else if (was?.moved && area) selectEntitiesInArea(area);
-    else {
+      if (was?.moved && area) void confirmMapFocusArea(area);
+      else {
+        state.selectionDraft = null;
+        draw();
+      }
+    } else if (was?.moved && area) {
+      state.selectionDraft = null;
+      selectEntitiesInArea(area);
+    } else {
+      state.selectionDraft = null;
       draw();
       tap(e.offsetX, e.offsetY, {
         additive: selectionOnly || e.shiftKey || e.ctrlKey || e.metaKey,
@@ -1921,7 +2410,7 @@ function sendDraw(payload) {
 function startDrawStroke(x, y) {
   const p = screenToWorld(x, y);
   state.drawStroke = {
-    id: crypto.randomUUID?.() || String(Date.now() + Math.random()),
+    id: generateRequestId(),
     userId: +state.user.id,
     userName: state.user.name || '',
     color: currentDrawingColor(),
