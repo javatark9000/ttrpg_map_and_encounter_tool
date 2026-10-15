@@ -1876,7 +1876,11 @@ function image(id) {
 
 // Canvas tools and pointer interaction.
 $$('[data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
-function setMode(m) {
+function setMode(m, keepPendingAction = false) {
+  if (!keepPendingAction) {
+    state.cloneSource = null;
+    state.moveToken = null;
+  }
   state.mode = m;
   state.objectDraft = null;
   state.selectionDraft = null;
@@ -1891,6 +1895,8 @@ function setMode(m) {
   draw();
 }
 function setDrawingMode(on) {
+  state.cloneSource = null;
+  state.moveToken = null;
   state.mode = on ? 'draw' : 'pan';
   state.drawStroke = null;
   $$('[data-main-tool]').forEach(
@@ -3149,10 +3155,16 @@ function inspect(t) {
       $('#inspect-clone').onclick = () => {
         const same =
           state.cloneSource && state.cloneSource.kind === t.kind && +state.cloneSource.id === +t.id;
-        state.cloneSource = same ? null : { kind: t.kind, id: +t.id };
-        setMode('select');
+        if (same) {
+          setMode('pan');
+          renderEntitySelection();
+          toast('Clonado desactivado');
+          return;
+        }
+        state.cloneSource = { kind: t.kind, id: +t.id };
+        setMode('select', true);
         renderEntitySelection();
-        toast(same ? 'Clonado desactivado' : 'Clonado activado: toca casillas para crear copias');
+        toast('Clonado activado: toca casillas para crear copias');
       };
     if ($('#inspect-delete'))
       $('#inspect-delete').onclick = () => {
