@@ -24,7 +24,7 @@ final class GameService
                 )
                 : [];
         $scenarioSql =
-            'SELECT s.*,a.path background_path FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.campaign_id IN (SELECT campaign_id FROM campaign_members WHERE user_id=?) AND s.is_deleted=0';
+            'SELECT s.*,a.path background_path,a.mime background_mime FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.campaign_id IN (SELECT campaign_id FROM campaign_members WHERE user_id=?) AND s.is_deleted=0';
         if ($user['role'] !== 'DM') {
             $scenarioSql .= ' AND s.active=1';
         }
@@ -42,7 +42,7 @@ final class GameService
     public function snapshot(int $scenarioId, array $user): array
     {
         $s = $this->one(
-            'SELECT s.*,a.path background_path FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.id=?',
+            'SELECT s.*,a.path background_path,a.mime background_mime FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.id=?',
             [$scenarioId],
         );
         if (!$s || !empty($s['is_deleted'])) {
@@ -494,6 +494,7 @@ final class GameService
                 'tokens.delete',
                 'npc.create',
                 'token.update',
+                'token.rotate',
                 'token.delete',
                 'token.clone',
                 'token.move_dm',
@@ -533,6 +534,7 @@ final class GameService
                 'tokens.delete' => $this->deleteTokens($s, $p),
                 'npc.create' => $this->createNpc($s, $p, $user),
                 'token.update' => $this->updateToken($s, $p),
+                'token.rotate' => $this->rotateNpc($scenarioId, $p),
                 'token.delete' => $this->deleteToken($s, $p),
                 'token.clone' => $this->cloneToken($s, $p),
                 'token.move_dm' => $this->moveDm($s, $p),
@@ -859,7 +861,7 @@ final class GameService
                 : $stats['armorClass'] ?? null;
         $rotation = array_key_exists('rotationDegrees', $p)
             ? $this->snapRotation((int) $p['rotationDegrees'])
-            : $this->autoNpcRotation($s, $x, $y);
+            : 0;
         $this->db
             ->prepare(
                 'INSERT INTO npc_characters(scenario_id,name,x,y,notes,health,max_health,armor_class,rotation_degrees,initiative,visible,image_asset_id,codex_creature_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -885,32 +887,6 @@ final class GameService
     {
         $degrees = (($degrees % 360) + 360) % 360;
         return (int) (round($degrees / 45) * 45) % 360;
-    }
-    private function autoNpcRotation(array $s, int $x, int $y): int
-    {
-        $players = $this->all('SELECT x,y FROM scenario_players WHERE scenario_id=? AND placed=1', [
-            $s['id'],
-        ]);
-        $best = null;
-        $bestDist = null;
-        foreach ($players as $pl) {
-            $dx = (int) $pl['x'] - $x;
-            $dy = (int) $pl['y'] - $y;
-            $dist = $dx * $dx + $dy * $dy;
-            if ($dist === 0) {
-                continue;
-            }
-            if ($bestDist === null || $dist < $bestDist) {
-                $bestDist = $dist;
-                $best = [$dx, $dy];
-            }
-        }
-        if (!$best) {
-            return 0;
-        }
-        [$dx, $dy] = $best;
-        $deg = rad2deg(atan2(-$dx, $dy));
-        return $this->snapRotation((int) round($deg));
     }
     private function codexCreatureStats(int $creatureId): array
     {
@@ -1094,7 +1070,7 @@ final class GameService
                     $src['health'],
                     $src['max_health'] ?? $src['health'],
                     $src['armor_class'],
-                    $this->autoNpcRotation($s, $x, $y),
+                    $src['rotation_degrees'],
                     $src['initiative'],
                     $src['visible'],
                     $src['dead_hidden'],
@@ -1221,6 +1197,27 @@ final class GameService
             ->prepare("UPDATE $table SET " . implode(',', $sets) . ' WHERE id=? AND scenario_id=?')
             ->execute($vals);
         return ['kind' => $kind, 'id' => $id];
+    }
+
+    private function rotateNpc(int $sid, array $p): array
+    {
+        $id = (int) ($p['id'] ?? 0);
+        $delta = (int) ($p['delta'] ?? 0);
+        if (!in_array($delta, [-45, 45], true)) {
+            throw new RuntimeException('Giro inválido.');
+        }
+        $npc = $this->one(
+            'SELECT rotation_degrees FROM npc_characters WHERE id=? AND scenario_id=? FOR UPDATE',
+            [$id, $sid],
+        );
+        if (!$npc) {
+            throw new RuntimeException('NPC inexistente.');
+        }
+        $degrees = $this->snapRotation((int) $npc['rotation_degrees'] + $delta);
+        $this->db
+            ->prepare('UPDATE npc_characters SET rotation_degrees=? WHERE id=? AND scenario_id=?')
+            ->execute([$degrees, $id, $sid]);
+        return ['kind' => 'NPC', 'id' => $id, 'rotation_degrees' => $degrees];
     }
 
     private function moveDm(array $s, array $p): array
@@ -2109,19 +2106,26 @@ final class GameService
         if ($user['role'] !== 'PLAYER') {
             throw new RuntimeException('Rotación de jugador inválida.');
         }
-        $this->db->exec(
-            'ALTER TABLE scenario_players ADD COLUMN IF NOT EXISTS rotation_degrees SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER token_color',
-        );
         $id = (int) ($p['id'] ?? 0);
-        $degrees = $this->snapRotation((int) ($p['rotation_degrees'] ?? 0));
-        $this->db
-            ->prepare(
-                'UPDATE scenario_players SET rotation_degrees=? WHERE id=? AND scenario_id=? AND user_id=? AND placed=1',
-            )
-            ->execute([$degrees, $id, $sid, $user['id']]);
-        if ($this->db->query('SELECT ROW_COUNT()')->fetchColumn() < 1) {
+        $row = $this->one(
+            'SELECT rotation_degrees FROM scenario_players WHERE id=? AND scenario_id=? AND user_id=? AND placed=1 FOR UPDATE',
+            [$id, $sid, $user['id']],
+        );
+        if (!$row) {
             throw new RuntimeException('Solo puedes rotar tu propia ficha seleccionada.');
         }
+        if (array_key_exists('delta', $p)) {
+            $delta = (int) $p['delta'];
+            if (!in_array($delta, [-45, 45], true)) {
+                throw new RuntimeException('Giro inválido.');
+            }
+            $degrees = $this->snapRotation((int) $row['rotation_degrees'] + $delta);
+        } else {
+            $degrees = $this->snapRotation((int) ($p['rotation_degrees'] ?? 0));
+        }
+        $this->db
+            ->prepare('UPDATE scenario_players SET rotation_degrees=? WHERE id=?')
+            ->execute([$degrees, $id]);
         return ['kind' => 'PLAYER', 'id' => $id, 'rotation_degrees' => $degrees];
     }
 

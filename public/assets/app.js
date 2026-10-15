@@ -13,7 +13,8 @@ import { createD20Renderer } from './js/dice.js';
 const DRAW_POINT_MIN_DISTANCE = 0.18;
 let diceHideTimer = null,
   diceRenderer = null,
-  pendingDiceRequestId = null;
+  pendingDiceRequestId = null,
+  animatedMapTimer = null;
 function displayHp(v, t = null) {
   return Math.max(t?.kind === 'PLAYER' || t?.actor_type === 'PLAYER' ? -10 : 0, Number(v ?? 0));
 }
@@ -778,22 +779,14 @@ function renderPlayerHp() {
     (b) =>
       (b.onclick = () => {
         const p = mine.find((x) => +x.id === +b.dataset.rotLeft);
-        if (p)
-          command('player.rotate', {
-            id: +p.id,
-            rotation_degrees: ((+p.rotation_degrees || 0) - 45 + 360) % 360,
-          });
+        if (p) command('player.rotate', { id: +p.id, delta: -45 });
       }),
   );
   list.querySelectorAll('[data-rot-right]').forEach(
     (b) =>
       (b.onclick = () => {
         const p = mine.find((x) => +x.id === +b.dataset.rotRight);
-        if (p)
-          command('player.rotate', {
-            id: +p.id,
-            rotation_degrees: ((+p.rotation_degrees || 0) + 45) % 360,
-          });
+        if (p) command('player.rotate', { id: +p.id, delta: 45 });
       }),
   );
 }
@@ -1074,14 +1067,16 @@ $('#delete-scenario').onclick = async () => {
   command('scenario.hide');
 };
 let uploadTarget = null;
-$('#upload-background').onclick = () => {
-  uploadTarget = 'background';
+const staticImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+function openImagePicker(target, allowGif = false) {
+  uploadTarget = target;
+  $('#image-file').accept = [...staticImageTypes, ...(allowGif ? ['image/gif'] : [])].join(',');
   $('#image-file').click();
-};
+}
+$('#upload-background').onclick = () => openImagePicker('background', true);
 $('#upload-avatar').onclick = () => {
   if (!state.selectedCharacter) return toast('Selecciona un personaje');
-  uploadTarget = 'avatar';
-  $('#image-file').click();
+  openImagePicker('avatar');
 };
 $('#image-file').onchange = async (e) => {
   const file = e.target.files[0];
@@ -1091,8 +1086,16 @@ $('#image-file').onchange = async (e) => {
     e.target.value = '';
     return;
   }
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-    toast('Usa una imagen JPEG, PNG o WebP');
+  const allowedTypes =
+      uploadTarget === 'background' ? [...staticImageTypes, 'image/gif'] : staticImageTypes,
+    detectedType =
+      file.type || (uploadTarget === 'background' && /\.gif$/i.test(file.name) ? 'image/gif' : '');
+  if (!allowedTypes.includes(detectedType)) {
+    toast(
+      uploadTarget === 'background'
+        ? 'Usa una imagen JPEG, PNG, WebP o GIF'
+        : 'Usa una imagen JPEG, PNG o WebP',
+    );
     e.target.value = '';
     return;
   }
@@ -1342,6 +1345,22 @@ function draw() {
   drawVisibilityEffects(cs);
   drawEncounterTokenHighlight(cs);
   if (restrictVisibility) ctx.restore();
+  scheduleAnimatedMapRedraw(s.background_mime === 'image/gif');
+}
+function scheduleAnimatedMapRedraw(animated) {
+  if (!animated) {
+    clearTimeout(animatedMapTimer);
+    animatedMapTimer = null;
+    return;
+  }
+  if (animatedMapTimer) return;
+  animatedMapTimer = setTimeout(
+    () => {
+      animatedMapTimer = null;
+      requestAnimationFrame(draw);
+    },
+    document.hidden ? 250 : 50,
+  );
 }
 function drawEncounterTokenHighlight(cs) {
   const highlighted = state.encounterTokenHighlight;
@@ -2677,10 +2696,8 @@ function openNpcCreatePopup(c) {
       $('#npc-creature-help').textContent =
         'Opcional. Busca con “contiene”; incluye criaturas custom.';
     };
-    let rotation = 0,
-      rotationTouched = false;
+    let rotation = 0;
     const setRotation = (v) => {
-      rotationTouched = true;
       rotation = ((v % 360) + 360) % 360;
       dialogForm.elements.rotationDegrees.value = rotation;
     };
@@ -2700,7 +2717,6 @@ function openNpcCreatePopup(c) {
       const values = Object.fromEntries(new FormData(dialogForm));
       values.visible = dialogForm.elements.visible.checked;
       values.codexCreatureId = selectedCreature ? +selectedCreature.id : null;
-      if (!rotationTouched) delete values.rotationDegrees;
       finish(values);
     };
   });
@@ -3012,10 +3028,7 @@ function renderEntitySelection() {
   if ($('#bulk-heal')) $('#bulk-heal').onclick = () => healTokens(healable);
   $('#bulk-show').onclick = () => command('tokens.bulk_update', { items: refs, visible: true });
   $('#bulk-hide').onclick = () => command('tokens.bulk_update', { items: refs, visible: false });
-  $('#bulk-image').onclick = () => {
-    uploadTarget = { bulkItems: refs };
-    $('#image-file').click();
-  };
+  $('#bulk-image').onclick = () => openImagePicker({ bulkItems: refs });
   $('#bulk-delete').onclick = () => {
     if (!confirm(`¿Eliminar ${items.length} tokens seleccionados del mapa?`)) return;
     command('tokens.delete', { items: refs });
@@ -3218,18 +3231,10 @@ function inspect(t) {
     };
     if ($('#inspect-rotate-left'))
       $('#inspect-rotate-left').onclick = () =>
-        command('token.update', {
-          kind: 'NPC',
-          id: +t.id,
-          rotation_degrees: ((+t.rotation_degrees || 0) - 45 + 360) % 360,
-        });
+        command('token.rotate', { kind: 'NPC', id: +t.id, delta: -45 });
     if ($('#inspect-rotate-right'))
       $('#inspect-rotate-right').onclick = () =>
-        command('token.update', {
-          kind: 'NPC',
-          id: +t.id,
-          rotation_degrees: ((+t.rotation_degrees || 0) + 45) % 360,
-        });
+        command('token.rotate', { kind: 'NPC', id: +t.id, delta: 45 });
     if ($('#inspect-creature-info'))
       $('#inspect-creature-info').onclick = () => openNpcCreatureInfo(+t.codex_creature_id);
     if ($('#inspect-include-combat'))
@@ -3238,10 +3243,7 @@ function inspect(t) {
     if ($('#inspect-end-turn')) $('#inspect-end-turn').onclick = () => command('turn.next');
     updateTurnControls();
     if ($('#inspect-image'))
-      $('#inspect-image').onclick = () => {
-        uploadTarget = { kind: t.kind, id: +t.id };
-        $('#image-file').click();
-      };
+      $('#inspect-image').onclick = () => openImagePicker({ kind: t.kind, id: +t.id });
     if ($('#inspect-clone'))
       $('#inspect-clone').onclick = () => {
         const same =

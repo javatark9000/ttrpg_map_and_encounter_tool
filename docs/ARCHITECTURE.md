@@ -84,9 +84,15 @@ El servidor persiste el resultado y envía `dice.roll.started` seguido de `dice.
 
 No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app.js`. Si otra sección independiente crece de forma similar, extráela solo cuando tenga un límite funcional claro y pocas dependencias.
 
-### Vida de personajes
+### Vida y rotación de personajes
 
 La vida actual de un personaje jugador es global dentro de `player_characters.current_health`; no pertenece a su colocación en un escenario. `scenario_players` conserva posición, rotación e iniciativa por mapa. Al colocar el mismo personaje en otro escenario mantiene sus últimos PV, y tanto los cambios del DM como la curación del jugador actualizan el valor global.
+
+Los botones de rotación envían incrementos de `±45°`; el servidor bloquea la ficha, acumula el giro sobre el valor persistido y normaliza el resultado. Los NPC nuevos comienzan a `0°` salvo que un cliente solicite explícitamente otra orientación, y sus clones conservan la rotación del original.
+
+### Fondos de mapa
+
+Los fondos admiten JPEG, PNG, WebP y GIF con un máximo de 15 MB. El servidor valida el contenido real mediante `getimagesize()` y no confía únicamente en la extensión o el MIME enviado por el navegador. Cuando el fondo es GIF, el Canvas se repinta periódicamente para mostrar su animación.
 
 ### Niebla de guerra
 

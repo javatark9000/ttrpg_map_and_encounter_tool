@@ -31,9 +31,14 @@ function uploadAsset(PDO $db, array $user): array
         throw new RuntimeException('La imagen supera el límite permitido de 15 MB.');
     }
     $info = getimagesize($f['tmp_name']);
-    $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+    $allowed = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'image/gif' => 'gif',
+    ];
     if (!$info || !isset($allowed[$info['mime']])) {
-        throw new RuntimeException('Formato no admitido. Usa JPEG, PNG o WebP.');
+        throw new RuntimeException('Formato no admitido. Usa JPEG, PNG, WebP o GIF.');
     }
     $name = bin2hex(random_bytes(24)) . '.' . $allowed[$info['mime']];
     $dir = dirname(__DIR__, 2) . '/storage/uploads';
