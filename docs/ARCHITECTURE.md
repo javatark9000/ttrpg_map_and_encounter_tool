@@ -88,7 +88,7 @@ No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app
 
 ### Niebla de guerra
 
-La niebla se guarda por casilla en `scenario_fog_cells`. Una casilla presente está oculta para jugadores e invitados; si el escenario no tiene filas, el mapa entero está revelado. En la herramienta de niebla, el DM revela con el botón izquierdo y oculta con el derecho; en pantallas táctiles, toca o arrastra para revelar y mantén pulsado para ocultar. El cliente envía `map.fog.paint`, y `map.fog.clear` revela todo. `GameService` valida permisos, escenario y coordenadas; WebSocket provoca una resincronización por snapshot. El Canvas recorta todo el contenido del mapa a las casillas visibles y muestra al DM una superposición translúcida sobre las casillas ocultas.
+La niebla se guarda por casilla en `scenario_fog_cells`. Una casilla presente está oculta para jugadores e invitados; si el escenario no tiene filas, el mapa entero está revelado. En la herramienta de niebla, el DM revela con el botón izquierdo y oculta con el derecho; al mantener `Ctrl`, el arrastre aplica la acción a todo el rectángulo seleccionado. En pantallas táctiles, toca o arrastra para revelar y mantén pulsado para ocultar. El cliente envía `map.fog.paint`, y `map.fog.clear` revela todo. `GameService` valida permisos, escenario y coordenadas; WebSocket provoca una resincronización por snapshot. El Canvas recorta todo el contenido del mapa a las casillas visibles y muestra al DM una superposición translúcida sobre las casillas ocultas.
 
 La migración `004_cell_based_fog_of_war.sql` convierte los antiguos rectángulos visibles a su conjunto complementario de casillas ocultas antes de eliminar `scenario_map_focus`.
 

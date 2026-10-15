@@ -55,6 +55,22 @@ assert.deepEqual(paintContext.state.data.blocked, [], 'fog painting does not alt
 vm.runInContext('paintAt(2, 3, false)', paintContext);
 assert.deepEqual(paintContext.state.data.foggedCells, [], 'reveal painting removes only fog');
 assert.equal(draws, 2, 'fog edits redraw optimistically');
+const areaContext = vm.createContext({});
+vm.runInContext(section('function cellsInArea(', 'function applyFogCells('), areaContext);
+assert.deepEqual(
+    JSON.parse(
+        JSON.stringify(areaContext.cellsInArea({ x: 2, y: 3, widthCells: 3, heightCells: 2 })),
+    ),
+    [
+        { x: 2, y: 3 },
+        { x: 3, y: 3 },
+        { x: 4, y: 3 },
+        { x: 2, y: 4 },
+        { x: 3, y: 4 },
+        { x: 4, y: 4 },
+    ],
+    'rectangle expansion includes every selected cell',
+);
 const pointerContext = vm.createContext({});
 vm.runInContext(section('function foggedForPointer(', 'canvas.onpointerdown'), pointerContext);
 assert.equal(pointerContext.foggedForPointer({ pointerType: 'mouse', button: 0 }), false);
@@ -62,9 +78,9 @@ assert.equal(pointerContext.foggedForPointer({ pointerType: 'mouse', button: 2 }
 assert.equal(pointerContext.foggedForPointer({ pointerType: 'touch', button: 2 }), false);
 assert.match(html, /data-mode="fog"/);
 assert.doesNotMatch(html, /data-mode="unfog"/);
-assert.match(html, /Clic izquierdo: revelar · clic derecho: ocultar/);
+assert.match(html, /Izquierdo: revelar · derecho: ocultar · Ctrl \+ arrastre: rectángulo/);
 assert.match(source, /fogged: !!was\?\.fogged/);
 assert.match(source, /fillStyle = '#080b0d80'/);
 assert.match(source, /command\(fogPaint \? 'map\.fog\.paint' : 'map\.cells\.paint'/);
 assert.match(source, /if \(!fogged\.has\(`\$\{x\},\$\{y\}`\)\)/);
-console.log('Fog of war: left reveal, right/long-press hide, lighter DM overlay and clipping OK');
+console.log('Fog of war: brush/rectangle reveal and hide, long press, DM overlay and clipping OK');

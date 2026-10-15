@@ -149,6 +149,22 @@ assert.deepEqual(JSON.parse(JSON.stringify(lastCommand)), {
     payload: { cells: [{ x: 2, y: 1 }], fogged: true },
 });
 
+reset('fog');
+context.state.data.foggedCells = Array.from({ length: 25 }, (_, index) => ({
+    x: 1 + (index % 5),
+    y: 1 + Math.floor(index / 5),
+}));
+drag({ altKey: false, ctrlKey: true });
+assert.deepEqual(context.state.data.foggedCells, [], 'Ctrl + left drag reveals the rectangle');
+assert.equal(lastCommand.type, 'map.fog.paint');
+assert.equal(lastCommand.payload.fogged, false);
+assert.equal(lastCommand.payload.cells.length, 25);
+drag({ button: 2, altKey: false, ctrlKey: true });
+assert.equal(context.state.data.foggedCells.length, 25, 'Ctrl + right drag fogs the rectangle');
+assert.equal(lastCommand.type, 'map.fog.paint');
+assert.equal(lastCommand.payload.fogged, true);
+assert.equal(lastCommand.payload.cells.length, 25);
+
 reset('select');
 context.state.moveToken = { kind: 'NPC', id: 22 };
 context.state.cloneSource = { kind: 'NPC', id: 22 };

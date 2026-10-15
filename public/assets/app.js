@@ -1435,13 +1435,33 @@ function selectionDraftArea() {
     heightCells: Math.abs(a.y - b.y) + 1,
   };
 }
+function cellsInArea(area) {
+  const cells = [];
+  for (let y = area.y; y < area.y + area.heightCells; y++)
+    for (let x = area.x; x < area.x + area.widthCells; x++) cells.push({ x, y });
+  return cells;
+}
+function applyFogCells(cells, fogged) {
+  const changed = new Set(cells.map((cell) => `${cell.x},${cell.y}`));
+  if (fogged) {
+    const existing = new Set((state.data.foggedCells || []).map((cell) => `${+cell.x},${+cell.y}`));
+    for (const cell of cells)
+      if (!existing.has(`${cell.x},${cell.y}`)) state.data.foggedCells.push(cell);
+  } else {
+    state.data.foggedCells = state.data.foggedCells.filter(
+      (cell) => !changed.has(`${+cell.x},${+cell.y}`),
+    );
+  }
+  draw();
+}
 function drawSelectionDraft(cs) {
   const area = selectionDraftArea();
   if (!area) return;
-  const p = worldToScreen(area.x, area.y);
+  const p = worldToScreen(area.x, area.y),
+    hidingFog = state.mode === 'fog' && state.drag?.fogRectangle && state.drag.fogged;
   ctx.save();
-  ctx.fillStyle = '#66aaff28';
-  ctx.strokeStyle = '#8bc5ff';
+  ctx.fillStyle = hidingFog ? '#d7aa5238' : '#66aaff28';
+  ctx.strokeStyle = hidingFog ? '#ffd782' : '#8bc5ff';
   ctx.lineWidth = 2;
   ctx.setLineDash([6, 4]);
   ctx.fillRect(p.x, p.y, area.widthCells * cs, area.heightCells * cs);
@@ -1853,8 +1873,7 @@ function setMode(m) {
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', x.dataset.mode === m));
   if (m !== 'path') state.path = [];
   if (m === 'object') toast('Arrastra sobre el mapa para definir el área del objeto');
-  if (m === 'fog')
-    toast('Izquierdo: revelar · derecho: ocultar · táctil: mantén pulsado para ocultar');
+  if (m === 'fog') toast('Izquierdo: revelar · derecho: ocultar · Ctrl + arrastre: rectángulo');
   if (m === 'select')
     toast(
       'Arrastra o toca para alternar selección; lo seleccionado se mantiene mientras sigas en Seleccionar',
@@ -1985,7 +2004,12 @@ canvas.onpointerdown = (e) => {
   const forcePan = e.button === 1,
     forceSelect =
       state.user.role === 'DM' && e.pointerType === 'mouse' && e.button === 0 && e.altKey,
-    mode = forceSelect ? 'select' : state.mode;
+    mode = forceSelect ? 'select' : state.mode,
+    fogRectangle =
+      mode === 'fog' &&
+      e.pointerType !== 'touch' &&
+      e.ctrlKey &&
+      (e.button === 0 || e.button === 2);
   if (forcePan || forceSelect || mode === 'fog') e.preventDefault();
   if (forceSelect) state.lastTap = null;
   canvas.setPointerCapture(e.pointerId);
@@ -2001,9 +2025,10 @@ canvas.onpointerdown = (e) => {
       forceSelect,
       pointerId: e.pointerId,
       fogged: mode === 'fog' ? foggedForPointer(e) : null,
+      fogRectangle,
       longPressTimer: null,
     };
-    if (mode === 'fog' && e.pointerType === 'touch')
+    if (mode === 'fog' && e.pointerType === 'touch' && !fogRectangle)
       state.drag.longPressTimer = setTimeout(() => {
         const drag = state.drag;
         if (!drag || drag.pointerId !== e.pointerId || drag.moved || state.mode !== 'fog') return;
@@ -2012,7 +2037,13 @@ canvas.onpointerdown = (e) => {
         paintAt(drag.x, drag.y, true);
         toast('Ocultando casillas…');
       }, 500);
-    if (!forcePan && mode === 'draw') {
+    if (!forcePan && fogRectangle) {
+      const cell = screenToCell(e.offsetX, e.offsetY);
+      if (validCell(cell)) {
+        state.selectionDraft = { start: cell, current: cell };
+        draw();
+      }
+    } else if (!forcePan && mode === 'draw') {
       startDrawStroke(e.offsetX, e.offsetY);
       draw();
     } else if (!forcePan && mode === 'object') {
@@ -2034,7 +2065,7 @@ canvas.onpointerdown = (e) => {
     state.drag.longPressTimer = null;
   }
   if (forcePan) canvas.classList.add('grabbing');
-  if (!forcePan && ['block', 'unblock', 'fog'].includes(mode))
+  if (!forcePan && !fogRectangle && ['block', 'unblock', 'fog'].includes(mode))
     paintAt(e.offsetX, e.offsetY, state.drag?.fogged);
 };
 canvas.addEventListener('auxclick', (e) => {
@@ -2081,6 +2112,12 @@ canvas.onpointermove = (e) => {
         draw();
         publishDmView();
       }
+    } else if (mode === 'fog' && state.drag.fogRectangle && state.selectionDraft) {
+      const cell = screenToCell(e.offsetX, e.offsetY);
+      if (validCell(cell)) {
+        state.selectionDraft.current = cell;
+        draw();
+      }
     } else if (mode === 'object' && state.objectDraft) {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
@@ -2094,7 +2131,7 @@ canvas.onpointermove = (e) => {
         draw();
       }
     } else if (mode === 'draw' && state.drawStroke) addDrawPoint(e.offsetX, e.offsetY);
-    else if (['block', 'unblock', 'fog'].includes(mode))
+    else if (!state.drag.fogRectangle && ['block', 'unblock', 'fog'].includes(mode))
       paintAt(e.offsetX, e.offsetY, state.drag.fogged);
   }
 };
@@ -2130,6 +2167,14 @@ canvas.onpointerup = (e) => {
     draw();
   } else if (mode === 'draw' && state.drawStroke) {
     finishDrawStroke();
+  } else if (selection && mode === 'fog' && was?.fogRectangle) {
+    const area = selectionDraftArea();
+    state.selectionDraft = null;
+    if (was.moved && area) {
+      const cells = cellsInArea(area);
+      applyFogCells(cells, !!was.fogged);
+      command('map.fog.paint', { cells, fogged: !!was.fogged });
+    } else draw();
   } else if (draft && mode === 'object') {
     const area = objectDraftArea();
     state.objectDraft = null;
