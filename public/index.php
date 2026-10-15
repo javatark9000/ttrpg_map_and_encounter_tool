@@ -191,8 +191,8 @@ try {
         }
         $hp = max(1, (int) ($body['maxHealth'] ?? 10));
         $db->prepare(
-            'INSERT INTO player_characters(owner_id,campaign_id,name,max_health) VALUES (?,?,?,?)',
-        )->execute([$user['id'], $cid, $name, $hp]);
+            'INSERT INTO player_characters(owner_id,campaign_id,name,max_health,current_health) VALUES (?,?,?,?,?)',
+        )->execute([$user['id'], $cid, $name, $hp, $hp]);
         jsonOut(['id' => (int) $db->lastInsertId()], 201);
     }
     if ($path === '/api/assets' && $method === 'POST') {

@@ -84,6 +84,10 @@ El servidor persiste el resultado y envía `dice.roll.started` seguido de `dice.
 
 No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app.js`. Si otra sección independiente crece de forma similar, extráela solo cuando tenga un límite funcional claro y pocas dependencias.
 
+### Vida de personajes
+
+La vida actual de un personaje jugador es global dentro de `player_characters.current_health`; no pertenece a su colocación en un escenario. `scenario_players` conserva posición, rotación e iniciativa por mapa. Al colocar el mismo personaje en otro escenario mantiene sus últimos PV, y tanto los cambios del DM como la curación del jugador actualizan el valor global.
+
 ### Niebla de guerra
 
 La niebla se guarda por casilla en `scenario_fog_cells`. Una casilla presente está oculta para jugadores e invitados; si el escenario no tiene filas, el mapa entero está revelado. En la herramienta de niebla, el DM revela con el botón izquierdo y oculta con el derecho; al mantener `Ctrl`, el arrastre aplica la acción a todo el rectángulo seleccionado. En pantallas táctiles, toca o arrastra para revelar y mantén pulsado para ocultar. El cliente envía `map.fog.paint`, y `map.fog.clear` revela todo. `GameService` valida permisos, escenario y coordenadas; WebSocket provoca una resincronización por snapshot. El Canvas recorta todo el contenido del mapa a las casillas visibles y muestra al DM una superposición translúcida sobre las casillas ocultas.

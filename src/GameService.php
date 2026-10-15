@@ -69,7 +69,7 @@ final class GameService
         }
         $npcs = $this->all($npcSql, [$scenarioId]);
         $players = $this->all(
-            'SELECT sp.*,u.name user_name,pc.name,pc.max_health,pc.drawing_color,pc.avatar_asset_id image_asset_id,a.path image_path,dpn.notes dm_notes FROM scenario_players sp JOIN users u ON u.id=sp.user_id JOIN player_characters pc ON pc.id=sp.character_id LEFT JOIN assets a ON a.id=pc.avatar_asset_id LEFT JOIN dm_player_notes dpn ON dpn.player_id=sp.user_id AND dpn.campaign_id=pc.campaign_id WHERE sp.scenario_id=?' .
+            'SELECT sp.id,sp.scenario_id,sp.user_id,sp.character_id,sp.x,sp.y,sp.token_color,sp.rotation_degrees,sp.initiative,sp.last_path,sp.placed,sp.updated_at,u.name user_name,pc.name,pc.current_health health,pc.max_health,pc.drawing_color,pc.avatar_asset_id image_asset_id,a.path image_path,dpn.notes dm_notes FROM scenario_players sp JOIN users u ON u.id=sp.user_id JOIN player_characters pc ON pc.id=sp.character_id LEFT JOIN assets a ON a.id=pc.avatar_asset_id LEFT JOIN dm_player_notes dpn ON dpn.player_id=sp.user_id AND dpn.campaign_id=pc.campaign_id WHERE sp.scenario_id=?' .
                 ($user['role'] === 'DM' ? '' : ' AND sp.placed=1'),
             [$scenarioId],
         );
@@ -1306,7 +1306,7 @@ final class GameService
             ->prepare(
                 'INSERT INTO scenario_players(scenario_id,user_id,character_id,x,y,health,token_color) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id),user_id=VALUES(user_id),x=VALUES(x),y=VALUES(y),health=VALUES(health),token_color=VALUES(token_color),last_path=NULL,placed=1',
             )
-            ->execute([$s['id'], $u['id'], $cid, $x, $y, $c['max_health'], $color]);
+            ->execute([$s['id'], $u['id'], $cid, $x, $y, $c['current_health'], $color]);
         return [
             'scenarioPlayerId' => (int) $this->db->lastInsertId(),
             'userId' => $u['id'],
@@ -2039,22 +2039,27 @@ final class GameService
             }
         } elseif ($kind === 'PLAYER') {
             $old = $this->one(
-                'SELECT sp.health,pc.name FROM scenario_players sp JOIN player_characters pc ON pc.id=sp.character_id WHERE sp.id=? AND sp.scenario_id=?',
+                'SELECT sp.character_id,pc.current_health health,pc.name FROM scenario_players sp JOIN player_characters pc ON pc.id=sp.character_id WHERE sp.id=? AND sp.scenario_id=?',
                 [$id, $sid],
             );
             if ($old) {
                 $oldHealth = (int) $old['health'];
                 $actorName = (string) $old['name'];
-            }
-            $this->db
-                ->prepare('UPDATE scenario_players SET health=? WHERE id=? AND scenario_id=?')
-                ->execute([$health, $id, $sid]);
-            if ($hasMax) {
+                $characterId = (int) $old['character_id'];
+                if ($hasMax) {
+                    $this->db
+                        ->prepare(
+                            'UPDATE player_characters SET current_health=?,max_health=? WHERE id=?',
+                        )
+                        ->execute([$health, $maxHealth, $characterId]);
+                } else {
+                    $this->db
+                        ->prepare('UPDATE player_characters SET current_health=? WHERE id=?')
+                        ->execute([$health, $characterId]);
+                }
                 $this->db
-                    ->prepare(
-                        'UPDATE player_characters pc JOIN scenario_players sp ON sp.character_id=pc.id SET pc.max_health=? WHERE sp.id=? AND sp.scenario_id=?',
-                    )
-                    ->execute([$maxHealth, $id, $sid]);
+                    ->prepare('UPDATE scenario_players SET health=? WHERE character_id=?')
+                    ->execute([$health, $characterId]);
             }
         } else {
             throw new RuntimeException('Participante inválido.');
@@ -2074,7 +2079,7 @@ final class GameService
         $id = (int) ($p['id'] ?? 0);
         $health = (int) ($p['health'] ?? 0);
         $row = $this->one(
-            'SELECT sp.id,pc.max_health FROM scenario_players sp JOIN player_characters pc ON pc.id=sp.character_id WHERE sp.id=? AND sp.scenario_id=? AND sp.user_id=? AND sp.placed=1',
+            'SELECT sp.id,sp.character_id,pc.current_health health,pc.max_health,pc.name FROM scenario_players sp JOIN player_characters pc ON pc.id=sp.character_id WHERE sp.id=? AND sp.scenario_id=? AND sp.user_id=? AND sp.placed=1',
             [$id, $sid, $user['id']],
         );
         if (!$row) {
@@ -2082,25 +2087,20 @@ final class GameService
         }
         $max = (int) $row['max_health'];
         $health = max(0, min($max, $health));
-        $old = $this->one(
-            'SELECT sp.health,pc.name FROM scenario_players sp JOIN player_characters pc ON pc.id=sp.character_id WHERE sp.id=? AND sp.scenario_id=? AND sp.user_id=?',
-            [$id, $sid, $user['id']],
-        );
         $this->db
-            ->prepare(
-                'UPDATE scenario_players SET health=? WHERE id=? AND scenario_id=? AND user_id=?',
-            )
-            ->execute([$health, $id, $sid, $user['id']]);
-        if ($old) {
-            $this->logHealthChange(
-                $sid,
-                'PLAYER',
-                $id,
-                (string) $old['name'],
-                (int) $old['health'],
-                $health,
-            );
-        }
+            ->prepare('UPDATE player_characters SET current_health=? WHERE id=? AND owner_id=?')
+            ->execute([$health, $row['character_id'], $user['id']]);
+        $this->db
+            ->prepare('UPDATE scenario_players SET health=? WHERE character_id=?')
+            ->execute([$health, $row['character_id']]);
+        $this->logHealthChange(
+            $sid,
+            'PLAYER',
+            $id,
+            (string) $row['name'],
+            (int) $row['health'],
+            $health,
+        );
         return ['kind' => 'PLAYER', 'id' => $id, 'health' => $health];
     }
 
