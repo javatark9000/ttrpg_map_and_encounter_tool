@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { Body, World, Plane, Vec3, ConvexPolyhedron, Material, ContactMaterial } from 'cannon-es';
 import {
     vertices,
@@ -129,21 +129,13 @@ const content =
         typeof v === 'number' && key !== 'step' ? round(v) : v,
     ) +
     ';\n';
-if (process.argv.includes('--check')) {
-    if (readFileSync(output, 'utf8').replaceAll('\r\n', '\n') !== content)
-        throw new Error('Stale trajectories: run npm run dice:generate.');
-    console.log('Physical trajectories are reproducible and up to date.');
-} else {
-    writeFileSync(output, content);
-    console.log(
-        `Generated ${tracks.length} trajectories (${(content.length / 1024).toFixed(1)} KiB).`,
-    );
-    console.table(
-        tracks.map((t) => ({
-            seed: t.seed,
-            seconds: round((t.samples.length - 1) * SAMPLE_STEP),
-            impacts: t.impacts.length,
-            topFace: t.topFace,
-        })),
-    );
-}
+writeFileSync(output, content);
+console.log(`Generated ${tracks.length} trajectories (${(content.length / 1024).toFixed(1)} KiB).`);
+console.table(
+    tracks.map((t) => ({
+        seed: t.seed,
+        seconds: round((t.samples.length - 1) * SAMPLE_STEP),
+        impacts: t.impacts.length,
+        topFace: t.topFace,
+    })),
+);

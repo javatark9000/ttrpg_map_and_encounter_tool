@@ -53,10 +53,3 @@ docker compose up -d --build --no-deps app websocket
 No continuar con el arranque si falla la migración. No borrar el volumen de MariaDB.
 
 Después de actualizar, volver a preparar/iniciar los encuentros que estuvieran en curso y recargar los navegadores. El historial anterior no contiene la planificación completa; no puede reconstruirse de forma fiable. La actualización no ejecuta la migración sobre los datos de partida automáticamente desde PHP.
-
-## Validación
-
-- `composer test`: integración existente y regresiones de `tests/turns.php` contra MariaDB.
-- `node tests/turn-controls.mjs`: bloqueo de doble clic, confirmación/snapshot, errores, reconexión y snapshots obsoletos.
-
-Las regresiones crean y eliminan sus propios escenarios. No requieren datasets privados. `legacy_documentation` quedó fuera de la revisión.

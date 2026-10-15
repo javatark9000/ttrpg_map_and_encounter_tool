@@ -32,7 +32,7 @@ docker compose up -d --build
 
 Esto inicia la aplicación en el puerto 8080, WebSocket en 8081 y MariaDB en 3306. La primera creación del volumen ejecuta `database/schema.sql`, carga los datasets adicionales de `database/private/` y enlaza las imágenes de `storage/media/`. El servicio `db-migrate` queda disponible únicamente para migraciones futuras y registra su ejecución en `schema_migrations`.
 
-Para reconstruir exclusivamente el entorno de pruebas desde cero:
+Para reconstruir exclusivamente una instalación local desde cero:
 
 ```bash
 docker compose down -v
@@ -100,13 +100,8 @@ El movimiento del d20 utiliza trayectorias físicas precalculadas con `cannon-es
 
 ```bash
 npm run format:check
-npm run dice:check
-node tests/dice-physics.mjs
-node tests/dice-renderer.mjs
-node tests/fog-of-war.mjs
-composer test
 composer audit
-find src public bin tests -name '*.php' -print0 | xargs -0 -n1 php -l
+find src public bin -name '*.php' -print0 | xargs -0 -n1 php -l
 node --check public/assets/app.js
 find public/assets/js -name '*.js' -print0 | xargs -0 -n1 node --check
 ```

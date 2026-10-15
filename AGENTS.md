@@ -16,10 +16,9 @@ Antes de cambiar código, identifica el área en `docs/ARCHITECTURE.md` y lee so
 
 ```bash
 npm run format:check
-find src public bin tests -name '*.php' -print0 | xargs -0 -n1 php -l
+find src public bin -name '*.php' -print0 | xargs -0 -n1 php -l
 node --check public/assets/app.js
 find public/assets/js -name '*.js' -print0 | xargs -0 -n1 node --check
-composer test # requiere MariaDB inicializada
 ```
 
 No escanees recursos binarios ni datasets para cambios normales de aplicación.

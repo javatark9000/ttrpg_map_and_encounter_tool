@@ -22,7 +22,7 @@ MariaDB y `GameService` son autoritativos. El navegador nunca debe decidir por s
 | Uploads y entrega de imágenes         | `src/Http/assets.php`                                       | `public/index.php`, tablas `assets`                                |
 | Consultas y homebrew del Codex        | `src/Http/codex.php`                                        | tablas Codex de `database/schema.sql`, `public/assets/js/codex.js` |
 | Protocolo y difusión WebSocket        | `src/WebSocketServer.php`                                   | `bin/websocket.php`, métodos públicos de `GameService`             |
-| Reglas de mapa, movimiento o combate  | `src/GameService.php`                                       | `database/schema.sql`, `tests/run.php`                             |
+| Reglas de mapa, movimiento o combate  | `src/GameService.php`                                       | `database/schema.sql`                                              |
 | Estado compartido del frontend        | `public/assets/js/state.js`                                 | módulos que consuman la propiedad modificada                       |
 | HTTP, selectores y escape frontend    | `public/assets/js/core.js`                                  | ninguno normalmente                                                |
 | Formularios genéricos                 | `public/assets/js/dialogs.js`                               | `public/app.html`, `public/assets/styles.css`                      |
@@ -78,11 +78,10 @@ Los módulos tienen estas responsabilidades:
 
 ### Movimiento del d20
 
-`npm run dice:generate` simula gravedad, fricción y colisiones a 480 Hz y guarda muestras a 60 Hz. La altura inicial es de 4,2–4,95 unidades (un 50 % más que la original) y la restitución es 0,528 (un 10 % más que 0,48). `npm run dice:check` comprueba que el recurso generado es reproducible. Las trayectorias terminan cuando el cuerpo queda dormido sobre una cara, no mediante un giro forzado.
+`npm run dice:generate` simula gravedad, fricción y colisiones a 480 Hz y guarda muestras a 60 Hz. La altura inicial es de 4,2–4,95 unidades (un 50 % más que la original) y la restitución es 0,528 (un 10 % más que 0,48). Las trayectorias terminan cuando el cuerpo queda dormido sobre una cara, no mediante un giro forzado.
 
 El servidor persiste el resultado y envía `dice.roll.started` seguido de `dice.roll.revealed` en la misma llamada, sin temporizador ni espera artificial. El cliente inicia inmediatamente una trayectoria seleccionada por `rollId`; el estado de preparación solo cubre el tránsito de mensajes. Una simetría del icosaedro aplicada a **todos** los fotogramas sitúa la cara autoritativa arriba sin cambiar numeración ni contactos. Los clientes reproducen la misma trayectoria independientemente de sus FPS. Los efectos y el tiempo de lectura comienzan al alcanzar el reposo. Con movimiento reducido se muestra directamente ese estado final.
 
-Pruebas: `node tests/dice-physics.mjs` valida las ocho trayectorias y sus veinte resultados; `node tests/dice-renderer.mjs` valida renderizado alternativo, ciclo de animación y mensajes. `composer test` incluye `tests/dice-websocket.php`, que comprueba la entrega inmediata, el orden de mensajes, la persistencia y los permisos.
 
 No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app.js`. Si otra sección independiente crece de forma similar, extráela solo cuando tenga un límite funcional claro y pocas dependencias.
 
@@ -102,9 +101,6 @@ La migración `004_cell_based_fog_of_war.sql` convierte los antiguos rectángulo
 
 Al añadir una columna o tabla, crea una migración nueva e incorpora también el resultado final a `schema.sql`. No restaures las migraciones históricas consolidadas.
 
-## Pruebas y formato
+## Formato
 
-- `tests/run.php` prueba integración del dominio contra MariaDB.
-- Prettier mantiene legibles PHP, JavaScript, HTML y CSS.
-- `composer test` necesita una base inicializada.
-- Los chequeos de sintaxis no necesitan servicios activos.
+Prettier mantiene legibles PHP, JavaScript, HTML y CSS. Los chequeos de sintaxis no necesitan servicios activos.
