@@ -340,6 +340,7 @@ async function openScenario(id) {
   state.lastPendingRequestIds = new Set();
   state.selectedMovementPreview = null;
   state.hoveredMovementPreview = null;
+  state.encounterTokenHighlight = null;
   state.chatThreads = [];
   state.openChats.clear();
   $('#chat-windows').innerHTML = '';
@@ -863,6 +864,7 @@ function renderRoundOrder() {
     show = state.user.role === 'DM' && encounter && encounter.state !== 'OFF';
   panel.hidden = !show;
   if (!show) {
+    state.encounterTokenHighlight = null;
     list.innerHTML = '';
     return;
   }
@@ -897,6 +899,10 @@ function renderRoundOrder() {
           ? (token.max_health ?? token.health)
           : (token.max_health ?? token.health);
       return {
+        participantId: +p.id,
+        kind: p.actor_type,
+        tokenId: +token.id,
+        token: { ...token, kind: p.actor_type },
         name: (token.name || token.user_name || 'Token') + status + hidden,
         initiative: p.initiative ?? token.initiative ?? '—',
         hp: token.health === undefined ? '—' : displayHp(token.health, { kind: p.actor_type }),
@@ -905,14 +911,39 @@ function renderRoundOrder() {
       };
     })
     .filter(Boolean);
+  const highlighted = state.encounterTokenHighlight;
+  if (
+    highlighted &&
+    !rows.some((row) => row.kind === highlighted.kind && row.tokenId === highlighted.id)
+  )
+    state.encounterTokenHighlight = null;
   list.innerHTML = rows.length
     ? rows
-        .map(
-          (r) =>
-            `<li class="${r.current ? 'current-round-token' : ''}"><span>${esc(r.name)} <small>(IR: ${esc(r.initiative)})</small></span><strong>${esc(r.hp)} / ${esc(r.max)}</strong></li>`,
-        )
+        .map((r) => {
+          const previewed =
+            state.encounterTokenHighlight?.kind === r.kind &&
+            state.encounterTokenHighlight?.id === r.tokenId;
+          return `<li data-participant-id="${r.participantId}" class="${r.current ? 'current-round-token' : ''}${previewed ? ' encounter-preview-token' : ''}"><span>${esc(r.name)} <small>(IR: ${esc(r.initiative)})</small></span><strong>${esc(r.hp)} / ${esc(r.max)}</strong></li>`;
+        })
         .join('')
     : '<li class="muted">No hay fichas incluidas en el encounter.</li>';
+  list.querySelectorAll('[data-participant-id]').forEach((item) => {
+    const row = rows.find((candidate) => candidate.participantId === +item.dataset.participantId);
+    item.onclick = () => {
+      state.encounterTokenHighlight = { kind: row.kind, id: row.tokenId };
+      list
+        .querySelectorAll('[data-participant-id]')
+        .forEach((entry) => entry.classList.toggle('encounter-preview-token', entry === item));
+      draw();
+    };
+    item.ondblclick = () => {
+      state.encounterTokenHighlight = null;
+      list
+        .querySelectorAll('[data-participant-id]')
+        .forEach((entry) => entry.classList.remove('encounter-preview-token'));
+      selectMapEntity(row.token);
+    };
+  });
 }
 
 function movementRequestPath(request) {
@@ -1309,7 +1340,27 @@ function draw() {
   for (const [, tokens] of groups) drawGroup(tokens, cs);
   drawFreehand();
   drawVisibilityEffects(cs);
+  drawEncounterTokenHighlight(cs);
   if (restrictVisibility) ctx.restore();
+}
+function drawEncounterTokenHighlight(cs) {
+  const highlighted = state.encounterTokenHighlight;
+  if (!highlighted || state.user?.role !== 'DM') return;
+  const tokens = highlighted.kind === 'PLAYER' ? state.data.players : state.data.npcs,
+    token = tokens.find((item) => +item.id === +highlighted.id);
+  if (!token || (highlighted.kind === 'PLAYER' && !+token.placed)) return;
+  const center = worldToScreen(+token.x + 0.5, +token.y + 0.5),
+    radius = cs * 0.6;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+  ctx.setLineDash([Math.max(5, cs * 0.1), Math.max(4, cs * 0.07)]);
+  ctx.lineWidth = Math.max(2, cs * 0.045);
+  ctx.strokeStyle = '#fff1a8';
+  ctx.shadowColor = '#000';
+  ctx.shadowBlur = Math.max(3, cs * 0.06);
+  ctx.stroke();
+  ctx.restore();
 }
 function fallbackDrawingColor(seed) {
   const palette = [

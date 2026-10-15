@@ -29,6 +29,7 @@ export const state = {
   lastPendingRequestIds: new Set(),
   selectedMovementPreview: null,
   hoveredMovementPreview: null,
+  encounterTokenHighlight: null,
   chatThreads: [],
   openChats: new Map(),
   lastTap: null,
