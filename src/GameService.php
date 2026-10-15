@@ -52,11 +52,10 @@ final class GameService
         if ($user['role'] !== 'DM' && !(bool) $s['active']) {
             throw new RuntimeException('El escenario no está activo.');
         }
-        $mapFocusAreas = $this->all(
-            'SELECT id,x,y,width_cells,height_cells FROM scenario_map_focus WHERE scenario_id=? ORDER BY id',
+        $foggedCells = $this->all(
+            'SELECT x,y FROM scenario_fog_cells WHERE scenario_id=? ORDER BY y,x',
             [$scenarioId],
         );
-        $mapFocus = $this->mapFocusBounds($mapFocusAreas);
         $blocked = $this->all('SELECT x,y FROM blocked_cells WHERE scenario_id=?', [$scenarioId]);
         $objects = $this->all(
             'SELECT o.*,a.path image_path FROM map_objects o LEFT JOIN assets a ON a.id=o.image_asset_id WHERE o.scenario_id=?' .
@@ -150,8 +149,7 @@ final class GameService
         }
         return [
             'scenario' => $s,
-            'mapFocus' => $mapFocus,
-            'mapFocusAreas' => $mapFocusAreas,
+            'foggedCells' => $foggedCells,
             'blocked' => $blocked,
             'objects' => $objects,
             'npcs' => $npcs,
@@ -486,8 +484,8 @@ final class GameService
                 'scenario.deactivate',
                 'scenario.hide',
                 'scenario.copy_alive_previous',
-                'map.focus',
-                'map.focus.clear',
+                'map.fog.paint',
+                'map.fog.clear',
                 'dice.roll.delete',
                 'map.cells.paint',
                 'object.create',
@@ -523,8 +521,8 @@ final class GameService
                 'scenario.deactivate' => $this->activate($scenarioId, false),
                 'scenario.hide' => $this->hideScenario($scenarioId),
                 'scenario.copy_alive_previous' => $this->copyAliveFromPreviousScenario($s),
-                'map.focus' => $this->setMapFocus($s, $p),
-                'map.focus.clear' => $this->clearMapFocus($s),
+                'map.fog.paint' => $this->paintFog($s, $p),
+                'map.fog.clear' => $this->clearFog($s),
                 'dice.roll.delete' => $this->deleteDiceRoll($s, $p),
                 'map.cells.paint' => $this->paint($s, $p),
                 'cell.note' => $this->cellNote($s, $p),
@@ -2183,54 +2181,31 @@ final class GameService
             ->execute([$eid, $kind, $id, $row['initiative'], $state]);
     }
 
-    private function setMapFocus(array $s, array $p): array
+    private function paintFog(array $s, array $p): array
     {
-        $x = max(0, (int) ($p['x'] ?? 0));
-        $y = max(0, (int) ($p['y'] ?? 0));
-        $w = max(1, (int) ($p['widthCells'] ?? 1));
-        $h = max(1, (int) ($p['heightCells'] ?? 1));
-        if ($x + $w > (int) $s['width']) {
-            $w = (int) $s['width'] - $x;
+        $cells = $p['cells'] ?? [];
+        if (!is_array($cells) || count($cells) > 3600) {
+            throw new RuntimeException('Selección inválida.');
         }
-        if ($y + $h > (int) $s['height']) {
-            $h = (int) $s['height'] - $y;
+        $fogged = (bool) ($p['fogged'] ?? true);
+        $insert = $this->db->prepare(
+            'INSERT IGNORE INTO scenario_fog_cells(scenario_id,x,y) VALUES (?,?,?)',
+        );
+        $delete = $this->db->prepare(
+            'DELETE FROM scenario_fog_cells WHERE scenario_id=? AND x=? AND y=?',
+        );
+        $clean = [];
+        foreach ($cells as $cell) {
+            [$x, $y] = $this->coords($s, $cell);
+            ($fogged ? $insert : $delete)->execute([$s['id'], $x, $y]);
+            $clean[] = ['x' => $x, 'y' => $y];
         }
-        if ($w < 1 || $h < 1) {
-            throw new RuntimeException('Área de mapa inválida.');
-        }
-        $this->db
-            ->prepare(
-                'INSERT INTO scenario_map_focus(scenario_id,x,y,width_cells,height_cells) VALUES (?,?,?,?,?)',
-            )
-            ->execute([$s['id'], $x, $y, $w, $h]);
-        return [
-            'id' => (int) $this->db->lastInsertId(),
-            'x' => $x,
-            'y' => $y,
-            'widthCells' => $w,
-            'heightCells' => $h,
-        ];
+        return ['cells' => $clean, 'fogged' => $fogged];
     }
-    private function mapFocusBounds(array $areas): ?array
-    {
-        if (!$areas) {
-            return null;
-        }
-        $minX = min(array_map(fn($area) => (int) $area['x'], $areas));
-        $minY = min(array_map(fn($area) => (int) $area['y'], $areas));
-        $maxX = max(array_map(fn($area) => (int) $area['x'] + (int) $area['width_cells'], $areas));
-        $maxY = max(array_map(fn($area) => (int) $area['y'] + (int) $area['height_cells'], $areas));
-        return [
-            'x' => $minX,
-            'y' => $minY,
-            'width_cells' => $maxX - $minX,
-            'height_cells' => $maxY - $minY,
-        ];
-    }
-    private function clearMapFocus(array $s): array
+    private function clearFog(array $s): array
     {
         $this->db
-            ->prepare('DELETE FROM scenario_map_focus WHERE scenario_id=?')
+            ->prepare('DELETE FROM scenario_fog_cells WHERE scenario_id=?')
             ->execute([$s['id']]);
         return ['cleared' => true];
     }

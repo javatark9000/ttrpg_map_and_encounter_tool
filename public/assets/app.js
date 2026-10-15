@@ -356,8 +356,7 @@ async function openScenario(id) {
   else {
     try {
       state.data = await api(`/scenarios/${id}/snapshot`);
-      fitMapFocusForPlayers();
-      updateMapFocusControls();
+      fitVisibleCellsForPlayers();
       renderSidebar();
       renderDetails();
       draw();
@@ -469,8 +468,7 @@ function handleSnapshot(data) {
   const pendingMovementIds = new Set((data.pendingMovements || []).map((item) => +item.id));
   if (!pendingMovementIds.has(+state.selectedMovementPreview)) state.selectedMovementPreview = null;
   if (!pendingMovementIds.has(+state.hoveredMovementPreview)) state.hoveredMovementPreview = null;
-  fitMapFocusForPlayers();
-  updateMapFocusControls();
+  fitVisibleCellsForPlayers();
   renderSidebar();
   renderDetails();
   draw();
@@ -1138,34 +1136,42 @@ function resize() {
     state.camera.x = r.width / 2 - (+state.followCamera.centerX || 0) * cellSize * z;
     state.camera.y = r.height / 2 - (+state.followCamera.centerY || 0) * cellSize * z;
   }
-  fitMapFocusForPlayers();
+  fitVisibleCellsForPlayers();
   draw();
 }
-function mapFocusAreas() {
-  if (Array.isArray(state.data?.mapFocusAreas)) return state.data.mapFocusAreas;
-  return state.data?.mapFocus ? [state.data.mapFocus] : [];
+function foggedCellSet() {
+  return new Set((state.data?.foggedCells || []).map((cell) => `${+cell.x},${+cell.y}`));
 }
-function updateMapFocusControls() {
-  const button = $('#map-focus-mode');
-  if (!button || state.user?.role !== 'DM') return;
-  button.textContent = mapFocusAreas().length
-    ? '✂ Añadir más visibilidad'
-    : '✂ Hacer visible una parte';
+function visibleCellBounds() {
+  const scenario = state.data?.scenario,
+    fogged = foggedCellSet();
+  if (!scenario || !fogged.size) return null;
+  let minX = +scenario.width,
+    minY = +scenario.height,
+    maxX = -1,
+    maxY = -1;
+  for (let y = 0; y < +scenario.height; y++)
+    for (let x = 0; x < +scenario.width; x++)
+      if (!fogged.has(`${x},${y}`)) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+  return maxX < 0 ? null : { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
-function fitMapFocusForPlayers() {
-  const f = state.data?.mapFocus;
-  if (!f || state.user?.role === 'DM') return;
-  const r = canvas.getBoundingClientRect();
-  if (!r.width || !r.height) return;
-  const z = Math.min(
-    r.width / (+f.width_cells * cellSize),
-    r.height / (+f.height_cells * cellSize),
-  );
+function fitVisibleCellsForPlayers() {
+  if (state.user?.role === 'DM') return;
+  const bounds = visibleCellBounds(),
+    r = canvas.getBoundingClientRect();
+  if (!bounds || !r.width || !r.height) return;
+  const z = Math.min(r.width / (bounds.width * cellSize), r.height / (bounds.height * cellSize));
   state.camera.z = Math.min(3, Math.max(0.25, z));
   state.camera.x =
-    (r.width - +f.width_cells * cellSize * state.camera.z) / 2 - +f.x * cellSize * state.camera.z;
+    (r.width - bounds.width * cellSize * state.camera.z) / 2 - bounds.x * cellSize * state.camera.z;
   state.camera.y =
-    (r.height - +f.height_cells * cellSize * state.camera.z) / 2 - +f.y * cellSize * state.camera.z;
+    (r.height - bounds.height * cellSize * state.camera.z) / 2 -
+    bounds.y * cellSize * state.camera.z;
   $('#zoom-label').textContent = Math.round(state.camera.z * 100) + '%';
 }
 new ResizeObserver(resize).observe($('#map-wrap'));
@@ -1200,15 +1206,17 @@ function draw() {
     z = state.camera.z,
     cs = cellSize * z,
     origin = worldToScreen(0, 0),
-    focusAreas = mapFocusAreas(),
-    restrictVisibility = state.user?.role !== 'DM' && focusAreas.length > 0;
+    fogged = foggedCellSet(),
+    restrictVisibility = state.user?.role !== 'DM' && fogged.size > 0;
   if (restrictVisibility) {
     ctx.save();
     ctx.beginPath();
-    focusAreas.forEach((area) => {
-      const p = worldToScreen(+area.x, +area.y);
-      ctx.rect(p.x, p.y, +area.width_cells * cs, +area.height_cells * cs);
-    });
+    for (let y = 0; y < +s.height; y++)
+      for (let x = 0; x < +s.width; x++)
+        if (!fogged.has(`${x},${y}`)) {
+          const p = worldToScreen(x, y);
+          ctx.rect(p.x, p.y, cs, cs);
+        }
     ctx.clip();
   }
   if (s.background_asset_id) {
@@ -1238,7 +1246,7 @@ function draw() {
     ctx.lineTo(origin.x + s.width * cs, p.y);
   }
   ctx.stroke();
-  if (focusAreas.length && state.user?.role === 'DM') drawMapFocusBorders(cs);
+  if (fogged.size && state.user?.role === 'DM') drawFoggedCells(cs, fogged);
   if (state.objectDraft) drawObjectDraft(cs);
   if (state.selectionDraft) drawSelectionDraft(cs);
   state.path.forEach((c, i) => {
@@ -1384,16 +1392,17 @@ function objectDraftArea() {
     heightCells: Math.abs(a.y - b.y) + 1,
   };
 }
-function drawMapFocusBorders(cs) {
+function drawFoggedCells(cs, fogged) {
   ctx.save();
-  ctx.strokeStyle = '#fff36b';
-  ctx.lineWidth = Math.max(3, cs * 0.07);
-  ctx.shadowColor = '#fff36b';
-  ctx.shadowBlur = 18;
-  mapFocusAreas().forEach((area) => {
-    const p = worldToScreen(+area.x, +area.y);
-    ctx.strokeRect(p.x, p.y, +area.width_cells * cs, +area.height_cells * cs);
-  });
+  ctx.fillStyle = '#080b0d80';
+  ctx.strokeStyle = '#d7aa5266';
+  ctx.lineWidth = Math.max(1, cs * 0.025);
+  for (const key of fogged) {
+    const [x, y] = key.split(',').map(Number),
+      p = worldToScreen(x, y);
+    ctx.fillRect(p.x, p.y, cs, cs);
+    ctx.strokeRect(p.x, p.y, cs, cs);
+  }
   ctx.restore();
 }
 function drawObjectDraft(cs) {
@@ -1844,12 +1853,8 @@ function setMode(m) {
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', x.dataset.mode === m));
   if (m !== 'path') state.path = [];
   if (m === 'object') toast('Arrastra sobre el mapa para definir el área del objeto');
-  if (m === 'mapfocus')
-    toast(
-      mapFocusAreas().length
-        ? 'Arrastra para añadir otra parte visible para los jugadores'
-        : 'Arrastra para elegir la parte del mapa que verán los jugadores',
-    );
+  if (m === 'fog')
+    toast('Izquierdo: revelar · derecho: ocultar · táctil: mantén pulsado para ocultar');
   if (m === 'select')
     toast(
       'Arrastra o toca para alternar selección; lo seleccionado se mantiene mientras sigas en Seleccionar',
@@ -1914,37 +1919,18 @@ $('#draw-size-up').onclick = () => {
 $('#draw-clear-all').onclick = () => {
   if (confirm('¿Borrar todos los dibujos del mapa?')) sendDraw({ op: 'clearAll' });
 };
-$('#clear-map-focus').onclick = async () => {
-  if (!mapFocusAreas().length) {
+$('#clear-map-fog').onclick = async () => {
+  if (!state.data?.foggedCells?.length) {
     toast('El mapa completo ya está revelado');
     return;
   }
   const confirmed = await openForm({
     title: 'Revelar todo el mapa',
-    description: '¿Seguro que quieres que los jugadores puedan ver el mapa completo?',
+    description: '¿Seguro que quieres quitar la niebla de todas las casillas?',
     submitText: 'Sí, revelar todo',
   });
-  if (confirmed) command('map.focus.clear');
+  if (confirmed) command('map.fog.clear');
 };
-async function confirmMapFocusArea(area) {
-  const confirmed = await openForm({
-    title: mapFocusAreas().length ? 'Añadir área visible' : 'Revelar área',
-    description: `¿Seguro que quieres revelar esta área de ${area.widthCells} × ${area.heightCells} casillas?`,
-    submitText: 'Sí, revelar área',
-  });
-  state.selectionDraft = null;
-  draw();
-  if (!confirmed) {
-    toast('Área descartada. Puedes dibujarla de nuevo.');
-    return;
-  }
-  command('map.focus', {
-    x: area.x,
-    y: area.y,
-    widthCells: area.widthCells,
-    heightCells: area.heightCells,
-  });
-}
 $('#zoom-in').onclick = () => zoomAt(1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
 $('#zoom-out').onclick = () => zoomAt(1 / 1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
 function zoomAt(f, x, y) {
@@ -1992,12 +1978,15 @@ canvas.addEventListener(
   },
   { passive: false },
 );
+function foggedForPointer(e) {
+  return e.pointerType !== 'touch' && e.button === 2;
+}
 canvas.onpointerdown = (e) => {
   const forcePan = e.button === 1,
     forceSelect =
       state.user.role === 'DM' && e.pointerType === 'mouse' && e.button === 0 && e.altKey,
     mode = forceSelect ? 'select' : state.mode;
-  if (forcePan || forceSelect) e.preventDefault();
+  if (forcePan || forceSelect || mode === 'fog') e.preventDefault();
   if (forceSelect) state.lastTap = null;
   canvas.setPointerCapture(e.pointerId);
   state.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
@@ -2010,7 +1999,19 @@ canvas.onpointerdown = (e) => {
       moved: false,
       forcePan,
       forceSelect,
+      pointerId: e.pointerId,
+      fogged: mode === 'fog' ? foggedForPointer(e) : null,
+      longPressTimer: null,
     };
+    if (mode === 'fog' && e.pointerType === 'touch')
+      state.drag.longPressTimer = setTimeout(() => {
+        const drag = state.drag;
+        if (!drag || drag.pointerId !== e.pointerId || drag.moved || state.mode !== 'fog') return;
+        drag.fogged = true;
+        state.paint.clear();
+        paintAt(drag.x, drag.y, true);
+        toast('Ocultando casillas…');
+      }, 500);
     if (!forcePan && mode === 'draw') {
       startDrawStroke(e.offsetX, e.offsetY);
       draw();
@@ -2020,7 +2021,7 @@ canvas.onpointerdown = (e) => {
         state.objectDraft = { start: cell, current: cell };
         draw();
       }
-    } else if (!forcePan && ['select', 'mapfocus'].includes(mode) && state.user.role === 'DM') {
+    } else if (!forcePan && mode === 'select' && state.user.role === 'DM') {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.selectionDraft = { start: cell, current: cell };
@@ -2028,11 +2029,19 @@ canvas.onpointerdown = (e) => {
       }
     }
   }
+  if (state.pointers.size > 1 && state.drag?.longPressTimer) {
+    clearTimeout(state.drag.longPressTimer);
+    state.drag.longPressTimer = null;
+  }
   if (forcePan) canvas.classList.add('grabbing');
-  if (!forcePan && ['block', 'unblock'].includes(mode)) paintAt(e.offsetX, e.offsetY);
+  if (!forcePan && ['block', 'unblock', 'fog'].includes(mode))
+    paintAt(e.offsetX, e.offsetY, state.drag?.fogged);
 };
 canvas.addEventListener('auxclick', (e) => {
   if (e.button === 1) e.preventDefault();
+});
+canvas.addEventListener('contextmenu', (e) => {
+  if (state.mode === 'fog') e.preventDefault();
 });
 canvas.onpointermove = (e) => {
   if (!state.pointers.has(e.pointerId)) return;
@@ -2058,7 +2067,11 @@ canvas.onpointermove = (e) => {
     const mode = state.drag.forceSelect ? 'select' : state.mode,
       dx = e.offsetX - state.drag.x,
       dy = e.offsetY - state.drag.y;
-    if (Math.hypot(dx, dy) > 5) state.drag.moved = true;
+    if (Math.hypot(dx, dy) > 5) {
+      state.drag.moved = true;
+      if (state.drag.longPressTimer) clearTimeout(state.drag.longPressTimer);
+      state.drag.longPressTimer = null;
+    }
     const touchMapPan =
       e.pointerType === 'touch' && (['path', 'place'].includes(state.mode) || state.moveToken);
     if (state.drag.forcePan || mode === 'pan' || touchMapPan) {
@@ -2074,14 +2087,15 @@ canvas.onpointermove = (e) => {
         state.objectDraft.current = cell;
         draw();
       }
-    } else if (['select', 'mapfocus'].includes(mode) && state.selectionDraft) {
+    } else if (mode === 'select' && state.selectionDraft) {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.selectionDraft.current = cell;
         draw();
       }
     } else if (mode === 'draw' && state.drawStroke) addDrawPoint(e.offsetX, e.offsetY);
-    else if (['block', 'unblock'].includes(mode)) paintAt(e.offsetX, e.offsetY);
+    else if (['block', 'unblock', 'fog'].includes(mode))
+      paintAt(e.offsetX, e.offsetY, state.drag.fogged);
   }
 };
 function isTouchTap(e, drag) {
@@ -2099,6 +2113,7 @@ canvas.onpointerup = (e) => {
     selection = state.selectionDraft,
     touchTap = was && isTouchTap(e, was) && ['place', 'path', 'npc'].includes(mode);
   state.pointers.delete(e.pointerId);
+  if (was?.longPressTimer) clearTimeout(was.longPressTimer);
   if (state.pointers.size < 2) state.pinch = null;
   if (was?.multiTouch) {
     state.objectDraft = null;
@@ -2120,15 +2135,9 @@ canvas.onpointerup = (e) => {
     state.objectDraft = null;
     draw();
     if (area) void createObjectArea(area);
-  } else if (selection && ['select', 'mapfocus'].includes(mode)) {
+  } else if (selection && mode === 'select') {
     const area = selectionDraftArea();
-    if (mode === 'mapfocus') {
-      if (was?.moved && area) void confirmMapFocusArea(area);
-      else {
-        state.selectionDraft = null;
-        draw();
-      }
-    } else if (was?.moved && area) {
+    if (was?.moved && area) {
       state.selectionDraft = null;
       selectEntitiesInArea(area);
     } else {
@@ -2139,10 +2148,11 @@ canvas.onpointerup = (e) => {
         selectionOnly,
       });
     }
-  } else if (['block', 'unblock'].includes(mode) && state.paint.size) {
-    command('map.cells.paint', {
+  } else if (['block', 'unblock', 'fog'].includes(mode) && state.paint.size) {
+    const fogPaint = mode === 'fog';
+    command(fogPaint ? 'map.fog.paint' : 'map.cells.paint', {
       cells: [...state.paint.values()],
-      blocked: state.mode === 'block',
+      ...(fogPaint ? { fogged: !!was?.fogged } : { blocked: mode === 'block' }),
     });
     state.paint.clear();
   } else if (was && (!was.moved || touchTap)) {
@@ -2229,16 +2239,20 @@ function handleDrawEvent(e) {
   }
   draw();
 }
-function paintAt(x, y) {
-  const c = screenToCell(x, y);
-  if (validCell(c)) {
-    state.paint.set(`${c.x},${c.y}`, c);
-    const exists = state.data.blocked.some((b) => +b.x === c.x && +b.y === c.y);
-    if (state.mode === 'block' && !exists) state.data.blocked.push(c);
-    if (state.mode === 'unblock' && exists)
-      state.data.blocked = state.data.blocked.filter((b) => +b.x !== c.x || +b.y !== c.y);
-    draw();
-  }
+function paintAt(x, y, fogged = false) {
+  const cell = screenToCell(x, y);
+  if (!validCell(cell)) return;
+  state.paint.set(`${cell.x},${cell.y}`, cell);
+  const fogPaint = state.mode === 'fog',
+    collection = fogPaint ? 'foggedCells' : 'blocked',
+    exists = state.data[collection].some((item) => +item.x === cell.x && +item.y === cell.y),
+    add = fogPaint ? fogged : state.mode === 'block';
+  if (add && !exists) state.data[collection].push(cell);
+  if (!add && exists)
+    state.data[collection] = state.data[collection].filter(
+      (item) => +item.x !== cell.x || +item.y !== cell.y,
+    );
+  draw();
 }
 function tap(x, y, options = {}) {
   const c = screenToCell(x, y),

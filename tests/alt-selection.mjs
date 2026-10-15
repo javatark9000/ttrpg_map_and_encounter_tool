@@ -5,6 +5,7 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../public/assets/app.js', import.meta.url), 'utf8');
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
 const effects = [];
+let lastCommand = null;
 const canvas = {
     setPointerCapture() {},
     addEventListener() {},
@@ -27,7 +28,10 @@ const context = vm.createContext({
     },
     publishDmView: () => effects.push('pan'),
     zoomAt: () => effects.push('zoom'),
-    command: (type) => effects.push(type),
+    command: (type, payload) => {
+        effects.push(type);
+        lastCommand = { type, payload };
+    },
     paintAt: () => effects.push('paint'),
     startDrawStroke: () => effects.push('draw'),
     addDrawPoint: () => effects.push('draw'),
@@ -39,7 +43,9 @@ const context = vm.createContext({
 });
 for (const [start, end] of [
     ['function selectionDraftArea()', 'function drawSelectionDraft('],
+    ['function foggedForPointer(', 'canvas.onpointerdown ='],
     ['canvas.onpointerdown =', 'function sendDraw('],
+    ['function paintAt(', 'function tap('],
     ['function tap(', '// Token creation, selection, and inspection.'],
     ['function tokensAtCell(', 'function selectionItems()'],
 ])
@@ -47,6 +53,7 @@ for (const [start, end] of [
 
 function reset(mode = 'pan', role = 'DM') {
     effects.length = 0;
+    lastCommand = null;
     context.state = {
         user: { role, id: 1 },
         mode,
@@ -90,7 +97,7 @@ function drag(extra = {}, release = {}) {
     canvas.onpointerup(event('pointerup', 55, 55, { ...extra, ...release }));
 }
 
-for (const mode of ['pan', 'select', 'mapfocus', 'block', 'unblock', 'draw', 'object', 'npc']) {
+for (const mode of ['pan', 'select', 'fog', 'block', 'unblock', 'draw', 'object', 'npc']) {
     reset(mode);
     drag({}, { altKey: false });
     assert.deepEqual(
@@ -123,6 +130,25 @@ for (const mode of ['pan', 'select', 'mapfocus', 'block', 'unblock', 'draw', 'ob
     );
     assert.deepEqual(effects, [], `${mode}: clicks do not create, paint, draw, edit notes or zoom`);
 }
+reset('fog');
+context.state.data.foggedCells = [{ x: 1, y: 1 }];
+click(15, 15, { altKey: false });
+assert.deepEqual(context.state.data.foggedCells, [], 'left click reveals a fogged cell');
+assert.deepEqual(JSON.parse(JSON.stringify(lastCommand)), {
+    type: 'map.fog.paint',
+    payload: { cells: [{ x: 1, y: 1 }], fogged: false },
+});
+click(25, 15, { button: 2, altKey: false });
+assert.deepEqual(
+    context.state.data.foggedCells,
+    [{ x: 2, y: 1 }],
+    'right click fogs a visible cell',
+);
+assert.deepEqual(JSON.parse(JSON.stringify(lastCommand)), {
+    type: 'map.fog.paint',
+    payload: { cells: [{ x: 2, y: 1 }], fogged: true },
+});
+
 reset('select');
 context.state.moveToken = { kind: 'NPC', id: 22 };
 context.state.cloneSource = { kind: 'NPC', id: 22 };

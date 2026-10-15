@@ -8,7 +8,7 @@ Aplicación web responsive para administrar mapas, jugadores y encuentros de jue
 - Roles DM/jugador y lease que admite un único DM conectado.
 - Varios personajes por jugador y avatar por personaje.
 - Escenarios persistentes de 5×5 a 60×60, activación simultánea y confirmación al desactivar.
-- Fondo de mapa, celdas bloqueadas, notas de celda, objetos y NPC visibles/ocultos.
+- Fondo de mapa, niebla de guerra pintada por casillas, celdas bloqueadas, notas de celda, objetos y NPC visibles/ocultos.
 - Canvas con pan, zoom, rueda, Pointer Events y pinch-to-zoom.
 - Agrupación de tokens y pila con contador cuando hay cuatro o más.
 - Colocación simultánea y control independiente de varios personajes por jugador, con caminos diagonales celda a celda y aprobación del DM al cruzar bloqueos/actores vivos.
@@ -103,6 +103,7 @@ npm run format:check
 npm run dice:check
 node tests/dice-physics.mjs
 node tests/dice-renderer.mjs
+node tests/fog-of-war.mjs
 composer test
 composer audit
 find src public bin tests -name '*.php' -print0 | xargs -0 -n1 php -l

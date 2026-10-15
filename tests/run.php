@@ -107,40 +107,50 @@ try {
     $game->command($dm, 'scenario.activate', ['scenarioId' => $scenarioId], req());
     $game->command(
         $dm,
-        'map.focus',
+        'map.fog.paint',
         [
             'scenarioId' => $scenarioId,
-            'x' => 0,
-            'y' => 0,
-            'widthCells' => 2,
-            'heightCells' => 3,
+            'cells' => [['x' => 0, 'y' => 0], ['x' => 5, 'y' => 4]],
+            'fogged' => true,
         ],
         req(),
+    );
+    ok(
+        count($game->snapshot($scenarioId, $player)['foggedCells']) === 2,
+        'el DM oculta casillas individuales con niebla',
     );
     $game->command(
         $dm,
-        'map.focus',
+        'map.fog.paint',
         [
             'scenarioId' => $scenarioId,
-            'x' => 5,
-            'y' => 4,
-            'widthCells' => 2,
-            'heightCells' => 2,
+            'cells' => [['x' => 0, 'y' => 0]],
+            'fogged' => false,
         ],
         req(),
     );
-    $focusSnapshot = $game->snapshot($scenarioId, $player);
+    $fogSnapshot = $game->snapshot($scenarioId, $player);
     ok(
-        count($focusSnapshot['mapFocusAreas']) === 2 &&
-            (int) $focusSnapshot['mapFocus']['width_cells'] === 7 &&
-            (int) $focusSnapshot['mapFocus']['height_cells'] === 6,
-        'el DM añade varias áreas visibles sin reemplazar las anteriores',
+        count($fogSnapshot['foggedCells']) === 1 &&
+            (int) $fogSnapshot['foggedCells'][0]['x'] === 5 &&
+            (int) $fogSnapshot['foggedCells'][0]['y'] === 4,
+        'el DM revela casillas sin alterar el resto de la niebla',
     );
-    $game->command($dm, 'map.focus.clear', ['scenarioId' => $scenarioId], req());
-    $revealedSnapshot = $game->snapshot($scenarioId, $player);
+    try {
+        $game->command(
+            $guest,
+            'map.fog.paint',
+            ['scenarioId' => $scenarioId, 'cells' => [['x' => 1, 'y' => 1]], 'fogged' => true],
+            req(),
+        );
+        ok(false, 'invitado no puede editar la niebla');
+    } catch (RuntimeException) {
+        ok(true, 'invitado no puede editar la niebla');
+    }
+    $game->command($dm, 'map.fog.clear', ['scenarioId' => $scenarioId], req());
     ok(
-        !$revealedSnapshot['mapFocusAreas'] && $revealedSnapshot['mapFocus'] === null,
-        'revelar todo el mapa elimina todas las restricciones visibles',
+        !$game->snapshot($scenarioId, $player)['foggedCells'],
+        'revelar todo el mapa elimina la niebla de todas las casillas',
     );
     $pendingRoll = $game->startDiceRoll($scenarioId, $player);
     ok(
