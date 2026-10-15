@@ -1,83 +1,22 @@
 // Presentation only: the server supplies the result. No roll is decided here.
-const PHI = (1 + Math.sqrt(5)) / 2;
-const vertices = [
-  [-1, PHI, 0],
-  [1, PHI, 0],
-  [-1, -PHI, 0],
-  [1, -PHI, 0],
-  [0, -1, PHI],
-  [0, 1, PHI],
-  [0, -1, -PHI],
-  [0, 1, -PHI],
-  [PHI, 0, -1],
-  [PHI, 0, 1],
-  [-PHI, 0, -1],
-  [-PHI, 0, 1],
-].map(unit);
-const add = (a, b) => a.map((v, i) => v + b[i]);
-const sub = (a, b) => a.map((v, i) => v - b[i]);
-const mul = (a, s) => a.map((v) => v * s);
-const dot = (a, b) => a.reduce((sum, v, i) => sum + v * b[i], 0);
-const cross = (a, b) => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
-function unit(v) {
-  const length = Math.hypot(...v) || 1;
-  return v.map((x) => x / length);
-}
-const faces = [
-  [0, 11, 5],
-  [0, 5, 1],
-  [0, 1, 7],
-  [0, 7, 10],
-  [0, 10, 11],
-  [1, 5, 9],
-  [5, 11, 4],
-  [11, 10, 2],
-  [10, 7, 6],
-  [7, 1, 8],
-  [3, 9, 4],
-  [3, 4, 2],
-  [3, 2, 6],
-  [3, 6, 8],
-  [3, 8, 9],
-  [4, 9, 5],
-  [2, 4, 11],
-  [6, 2, 10],
-  [8, 6, 7],
-  [9, 8, 1],
-].map((indices) => {
-  const points = indices.map((i) => vertices[i]);
-  const center = mul(points.reduce(add, [0, 0, 0]), 1 / 3);
-  const normal = unit(center);
-  const up = unit(sub(points[0], center));
-  const right = cross(up, normal);
-  return {
-    indices,
-    center,
-    normal,
-    up,
-    right,
-    points: points.map((p) => add(center, mul(sub(p, center), 0.95))),
-    value: 0,
-  };
-});
-// As on a physical d20, opposite faces sum to 21.
-let nextPair = 20;
-for (const face of faces) {
-  if (face.value) continue;
-  face.value = nextPair;
-  faces.find((other) => dot(face.normal, other.normal) < -0.999).value = 21 - nextPair;
-  nextPair -= 2;
-}
+import {
+  vertices,
+  faces,
+  add,
+  sub,
+  mul,
+  dot,
+  cross,
+  unit,
+  rotationMatrix,
+  transform,
+} from './dice-geometry.js';
+import { createPhysicalThrow, samplePhysicalThrow, tableOutline } from './dice-motion.js';
+
 const TILE = 256,
   ATLAS_WIDTH = TILE * 4,
   ATLAS_HEIGHT = TILE * 8;
-const CAMERA = 4.8,
-  LENS = 3.08,
-  REST_TILT = -0.38;
+const LENS = 3.08;
 
 function faceUV(face, point) {
   const local = sub(point, face.center);
@@ -168,69 +107,14 @@ function makeAtlas() {
   return atlas;
 }
 
-// Quaternions avoid a snap or an upside-down numeral when settling on any of the 20 faces.
-function axisRotation(axis, angle) {
-  return [...mul(unit(axis), Math.sin(angle / 2)), Math.cos(angle / 2)];
-}
-function quaternionProduct(a, b) {
-  return [
-    ...add(add(mul(b.slice(0, 3), a[3]), mul(a.slice(0, 3), b[3])), cross(a, b)),
-    a[3] * b[3] - dot(a.slice(0, 3), b.slice(0, 3)),
-  ];
-}
-function rotationMatrix(q) {
-  const [x, y, z, w] = q;
-  // Column-major, shared by the GPU and the Canvas fallback.
-  return [
-    1 - 2 * (y * y + z * z),
-    2 * (x * y + z * w),
-    2 * (x * z - y * w),
-    2 * (x * y - z * w),
-    1 - 2 * (x * x + z * z),
-    2 * (y * z + x * w),
-    2 * (x * z + y * w),
-    2 * (y * z - x * w),
-    1 - 2 * (x * x + y * y),
-  ];
-}
-function transform(m, v) {
-  return [
-    m[0] * v[0] + m[3] * v[1] + m[6] * v[2],
-    m[1] * v[0] + m[4] * v[1] + m[7] * v[2],
-    m[2] * v[0] + m[5] * v[1] + m[8] * v[2],
-  ];
-}
-function slerp(a, b, t) {
-  let cosine = dot(a, b);
-  if (cosine < 0) {
-    b = mul(b, -1);
-    cosine = -cosine;
-  }
-  if (cosine > 0.9995) return unit(add(mul(a, 1 - t), mul(b, t)));
-  const angle = Math.acos(Math.min(1, cosine)),
-    sine = Math.sin(angle);
-  return add(mul(a, Math.sin((1 - t) * angle) / sine), mul(b, Math.sin(t * angle) / sine));
-}
-function landingRotation(value) {
-  const face = faces.find((f) => f.value === value);
-  const axis = cross(face.normal, [0, 0, 1]);
-  const align = axisRotation(
-    Math.hypot(...axis) < 0.0001 ? [1, 0, 0] : axis,
-    Math.acos(Math.max(-1, Math.min(1, face.normal[2]))),
-  );
-  const up = transform(rotationMatrix(align), face.up);
-  const upright = quaternionProduct(axisRotation([0, 0, 1], Math.atan2(up[0], up[1])), align);
-  // A slightly elevated view keeps the result legible without looking like a flat billboard.
-  return quaternionProduct(axisRotation([1, 0, 0], REST_TILT), upright);
-}
-
 const vertexShader = `
 attribute vec3 aPosition;
 attribute vec3 aNormal;
 attribute vec2 aUV;
 attribute float aBevel;
 uniform mat3 uRotation;
-uniform vec2 uOffset;
+uniform vec3 uOffset;
+uniform mediump float uCamera;
 uniform float uAspect;
 varying vec3 vPosition;
 varying vec3 vNormal;
@@ -238,8 +122,8 @@ varying vec3 vLocal;
 varying vec2 vUV;
 varying float vBevel;
 void main() {
-  vec3 p = uRotation * aPosition + vec3(uOffset, 0.0);
-  float depth = 4.8 - p.z;
+  vec3 p = uRotation * aPosition + uOffset;
+  float depth = uCamera - p.z;
   gl_Position = vec4(p.x * 3.08 / uAspect, p.y * 3.08, 1.002002 * depth - 0.2002002, depth);
   vPosition = p;
   vNormal = uRotation * aNormal;
@@ -252,6 +136,7 @@ precision mediump float;
 uniform sampler2D uAtlas;
 uniform float uOutcome;
 uniform float uImpact;
+uniform mediump float uCamera;
 varying vec3 vPosition;
 varying vec3 vNormal;
 varying vec3 vLocal;
@@ -270,7 +155,7 @@ vec3 light(vec3 position, vec3 color, vec3 n, vec3 v, vec3 base, float metal, fl
   return ((1.0-f)*(1.0-metal)*base/PI + distribution*geometry*f/max(4.0*nl*nv,0.001))*color*nl;
 }
 void main() {
-  vec3 n = normalize(vNormal), v = normalize(vec3(0.0,0.0,4.8)-vPosition);
+  vec3 n = normalize(vNormal), v = normalize(vec3(0.0,0.0,uCamera)-vPosition);
   float ink = texture2D(uAtlas,vUV).r*(1.0-vBevel);
   float etch = texture2D(uAtlas,vUV+vec2(0.0008,-0.0004)).r-texture2D(uAtlas,vUV-vec2(0.0008,-0.0004)).r;
   float grain = sin(vLocal.x*164.0+vLocal.z*80.0)*sin(vLocal.y*153.0-vLocal.z*61.0);
@@ -356,7 +241,7 @@ function webglPainter(canvas, atlas) {
         Math.min(4, gl.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT)),
       );
     const uniforms = Object.fromEntries(
-      ['uRotation', 'uOffset', 'uAspect', 'uOutcome', 'uImpact'].map((name) => [
+      ['uRotation', 'uOffset', 'uCamera', 'uAspect', 'uOutcome', 'uImpact'].map((name) => [
         name,
         gl.getUniformLocation(program, name),
       ]),
@@ -366,8 +251,10 @@ function webglPainter(canvas, atlas) {
     return (pose, width, height) => {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      if (pose.hidden) return;
       gl.uniformMatrix3fv(uniforms.uRotation, false, rotationMatrix(pose.rotation));
-      gl.uniform2f(uniforms.uOffset, pose.x, pose.lift + 0.08);
+      gl.uniform3fv(uniforms.uOffset, pose.offset);
+      gl.uniform1f(uniforms.uCamera, pose.camera);
       gl.uniform1f(uniforms.uAspect, width / height);
       gl.uniform1f(uniforms.uOutcome, pose.result === 20 ? 1 : pose.result === 1 ? -1 : 0);
       gl.uniform1f(uniforms.uImpact, pose.impact || 0);
@@ -384,12 +271,9 @@ function webglPainter(canvas, atlas) {
   }
 }
 
-function project(point, width, height, pose) {
-  const scale = (height * 0.5 * LENS) / (CAMERA - point[2]);
-  return [
-    (point[0] + pose.x) * scale + width / 2,
-    height / 2 - (point[1] + pose.lift + 0.08) * scale,
-  ];
+function project(point, width, height, camera) {
+  const scale = (height * 0.5 * LENS) / (camera - point[2]);
+  return [point[0] * scale + width / 2, height / 2 - point[1] * scale];
 }
 // Software fallback: subdivide textured triangles BEFORE projection. Numerals still
 // follow their physical face and remain clipped, even without hardware acceleration.
@@ -432,17 +316,20 @@ function canvasPainter(canvas, atlas) {
   return (pose, width, height) => {
     ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
     ctx.clearRect(0, 0, width, height);
+    if (pose.hidden) return;
     const m = rotationMatrix(pose.rotation);
     const visible = faces
       .map((face) => ({
         face,
         normal: transform(m, face.normal),
-        center: transform(m, face.center),
+        center: add(transform(m, face.center), pose.offset),
       }))
-      .filter(({ normal, center }) => dot(normal, sub([0, 0, CAMERA], center)) > 0)
+      .filter(({ normal, center }) => dot(normal, sub([0, 0, pose.camera], center)) > 0)
       .sort((a, b) => a.center[2] - b.center[2]);
     for (const { face, normal } of visible) {
-      const projected = face.points.map((p) => project(transform(m, p), width, height, pose));
+      const projected = face.points.map((p) =>
+        project(add(transform(m, p), pose.offset), width, height, pose.camera),
+      );
       path(projected);
       const light = 0.3 + Math.max(0, dot(normal, unit([-0.6, 1, 1]))) * 0.7;
       ctx.fillStyle =
@@ -463,7 +350,9 @@ function canvasPainter(canvas, atlas) {
           textureTriangle(
             face,
             points,
-            points.map((p) => project(transform(m, p), width, height, pose)),
+            points.map((p) =>
+              project(add(transform(m, p), pose.offset), width, height, pose.camera),
+            ),
           );
           return;
         }
@@ -490,19 +379,74 @@ function canvasPainter(canvas, atlas) {
 }
 
 function paintEffects(ctx, width, height, pose, elapsed, reduced) {
-  const unitSize = Math.min(width, height),
-    cx = width / 2,
-    cy = height * 0.79;
   ctx.clearRect(0, 0, width, height);
+  if (pose.hidden) return;
+  const unitSize = Math.min(width, height),
+    [cx, cy] = project(pose.ground, width, height, pose.camera),
+    [bodyX, bodyY] = project(pose.offset, width, height, pose.camera),
+    radius = (height * 0.5 * LENS) / (pose.camera - pose.ground[2]),
+    airborne = Math.max(0, pose.height - 0.8);
+  // A visible contact plane gives the bounce height a reference. The camera zooms
+  // into this same table; neither the floor nor the die changes scale in world space.
   ctx.save();
-  ctx.translate(cx + pose.x * unitSize * 0.25, cy);
-  ctx.scale(1 + pose.lift * 0.4, 0.18);
-  const shadow = ctx.createRadialGradient(0, 0, 0, 0, 0, unitSize * 0.3);
-  shadow.addColorStop(0, `rgba(0,0,0,${0.65 - pose.lift * 0.3})`);
+  const felt = ctx.createRadialGradient(
+    width / 2,
+    height * 0.55,
+    0,
+    width / 2,
+    height * 0.55,
+    unitSize * 0.58,
+  );
+  felt.addColorStop(0, '#31474d80');
+  felt.addColorStop(0.75, '#1a2c3240');
+  felt.addColorStop(1, '#111d2200');
+  ctx.beginPath();
+  tableOutline.forEach((point, i) => {
+    const [x, y] = project(point, width, height, pose.camera);
+    if (i) ctx.lineTo(x, y);
+    else ctx.moveTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = felt;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(186,162,110,${Math.max(0, pose.camera - 7) * 0.035})`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1 + airborne * 0.12, 0.8 + airborne * 0.1);
+  const shadow = ctx.createRadialGradient(
+    0,
+    0,
+    radius * 0.12,
+    0,
+    0,
+    radius * (1.1 + airborne * 0.18),
+  );
+  shadow.addColorStop(0, `rgba(0,0,0,${0.65 / (1 + airborne * 1.5)})`);
   shadow.addColorStop(1, 'transparent');
   ctx.fillStyle = shadow;
-  ctx.fillRect(-unitSize * 0.4, -unitSize * 0.4, unitSize * 0.8, unitSize * 0.8);
+  ctx.fillRect(-radius * 2, -radius * 2, radius * 4, radius * 4);
   ctx.restore();
+  // Brief contact dust follows actual collisions, not a periodic bounce animation.
+  if (!reduced && pose.contactAge < 0.22) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(213,191,152,${(1 - pose.contactAge / 0.22) * pose.contactStrength * 0.2})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(
+      cx,
+      cy,
+      radius * (0.4 + pose.contactAge * 2),
+      radius * (0.3 + pose.contactAge * 1.5),
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.stroke();
+    ctx.restore();
+  }
   if (elapsed == null || (pose.result !== 1 && pose.result !== 20)) return;
   const critical = pose.result === 20,
     t = reduced ? 0.32 : elapsed;
@@ -511,11 +455,11 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
   const halo = ctx.createRadialGradient(
-    cx,
-    height * 0.5,
+    bodyX,
+    bodyY,
     unitSize * 0.16,
-    cx,
-    height * 0.5,
+    bodyX,
+    bodyY,
     unitSize * 0.53,
   );
   halo.addColorStop(0, `rgba(${color},${fade * 0.15})`);
@@ -533,7 +477,7 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
       cx,
       cy,
       unitSize * (0.16 + t * 0.38),
-      unitSize * (0.045 + t * 0.1),
+      unitSize * (0.1 + t * 0.22),
       0,
       0,
       Math.PI * 2,
@@ -544,8 +488,8 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
         const angle = i * 2.39996,
           speed = 0.15 + (i % 7) * 0.024,
           radius = unitSize * (0.18 + speed * t);
-        const x = cx + Math.cos(angle) * radius,
-          y = height * 0.47 + Math.sin(angle) * radius + t * t * unitSize * 0.035;
+        const x = bodyX + Math.cos(angle) * radius,
+          y = bodyY + Math.sin(angle) * radius + t * t * unitSize * 0.035;
         ctx.globalAlpha = fade * Math.min(1, t * 8) * (0.5 + (i % 3) * 0.2);
         ctx.fillStyle = i % 3 ? '#ffd88a' : '#fff6d5';
         ctx.save();
@@ -573,7 +517,7 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
         for (let j = 1; j <= 4; j++) {
           const r = (reach * j) / 4,
             bend = Math.sin(i * 8 + j * 3) * 0.15;
-          ctx.lineTo(cx + Math.cos(angle + bend) * r, cy + Math.sin(angle + bend) * r * 0.32);
+          ctx.lineTo(cx + Math.cos(angle + bend) * r, cy + Math.sin(angle + bend) * r * 0.65);
         }
         ctx.stroke();
       }
@@ -607,12 +551,10 @@ export function createD20Renderer(canvas, effectsCanvas) {
   if (!paint) useSoftwareRenderer();
   const effects = effectsCanvas.getContext('2d');
   let frameId = null,
-    lastPose = null,
     startedAt = 0,
-    from = null,
-    result = null,
-    onLand = null,
-    notified = false;
+    throwing = null,
+    settledAt = null,
+    onLand = null;
   let phase = 'idle',
     seed = 0;
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -625,47 +567,20 @@ export function createD20Renderer(canvas, effectsCanvas) {
     if (phase === 'idle') return;
     const t = Math.max(0, (now - startedAt) / 1000),
       reduced = motion.matches;
-    let pose,
+    let pose = { hidden: true },
       effectTime = null;
-    if (phase === 'rolling') {
-      const spin = reduced ? 0.3 : t;
-      pose = {
-        rotation: quaternionProduct(
-          axisRotation([0.8, 1, 0.25], spin * 8 + seed),
-          axisRotation([0.1, 0, 1], spin * 2.6),
-        ),
-        lift: reduced ? 0 : (Math.abs(Math.sin(t * 7)) * 0.24) / (1 + t * 0.6),
-        x: reduced ? 0 : (Math.sin(t * 4) * 0.12) / (1 + t),
-        result: null,
-      };
-    } else {
-      const duration = reduced ? 0 : 0.72,
-        p = duration ? Math.min(1, t / duration) : 1,
-        ease = 1 - Math.pow(1 - p, 3);
-      let rotation = slerp(from.rotation, landingRotation(result), ease);
-      if (!reduced)
-        rotation = quaternionProduct(
-          axisRotation([1, 0.3, 0.15], Math.sin(p * Math.PI * 4) * Math.pow(1 - p, 2) * 0.12),
-          rotation,
-        );
-      pose = {
-        rotation,
-        lift: from.lift * (1 - p) + (reduced ? 0 : Math.sin(p * Math.PI) * 0.23),
-        x: from.x * (1 - ease),
-        result,
-      };
-      if (p === 1) {
-        effectTime = t - duration;
-        pose.impact = reduced ? 0.12 : Math.exp(-effectTime * 3) * 0.75;
-        if (result === 1 && !reduced)
-          pose.x = Math.sin(effectTime * 38) * Math.exp(-effectTime * 9) * 0.045;
-        if (!notified) {
-          notified = true;
+    if (phase === 'throwing') {
+      pose = samplePhysicalThrow(throwing, reduced || settledAt != null ? throwing.duration : t);
+      if (pose.settled) {
+        if (settledAt == null) {
+          settledAt = now;
           onLand?.();
         }
+        effectTime = (now - settledAt) / 1000;
+        pose.contactAge += effectTime;
+        pose.impact = reduced ? 0.12 : Math.exp(-effectTime * 3) * 0.75;
       }
     }
-    lastPose = pose;
     const bounds = canvas.getBoundingClientRect(),
       width = bounds.width,
       height = bounds.height;
@@ -684,7 +599,7 @@ export function createD20Renderer(canvas, effectsCanvas) {
       effects.setTransform(effectsCanvas.width / width, 0, 0, effectsCanvas.height / height, 0, 0);
       paintEffects(effects, width, height, pose, effectTime, reduced);
     }
-    if (!reduced && (phase === 'rolling' || effectTime === null || effectTime < 1.85))
+    if (!reduced && phase === 'throwing' && (effectTime === null || effectTime < 1.85))
       frameId = requestAnimationFrame(render);
   }
   function redraw() {
@@ -704,31 +619,30 @@ export function createD20Renderer(canvas, effectsCanvas) {
     redraw();
   });
   return {
-    start() {
+    start(rollId = 0) {
       cancel();
-      phase = 'rolling';
-      result = null;
+      phase = 'waiting';
+      throwing = null;
       onLand = null;
-      notified = false;
-      seed = Math.random() * Math.PI * 2;
+      settledAt = null;
+      seed = rollId;
       startedAt = performance.now();
       render(startedAt);
     },
     land(value, callback) {
       if (!Number.isInteger(value) || value < 1 || value > 20) return;
       cancel();
-      from = lastPose || { rotation: [0, 0, 0, 1], lift: 0, x: 0 };
-      phase = 'landing';
-      result = value;
+      throwing = createPhysicalThrow(value, seed);
+      phase = 'throwing';
       onLand = callback;
-      notified = false;
+      settledAt = null;
       startedAt = performance.now();
       render(startedAt);
     },
     stop() {
       cancel();
       phase = 'idle';
-      lastPose = null;
+      throwing = null;
       onLand = null;
     },
   };

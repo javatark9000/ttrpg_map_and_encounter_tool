@@ -28,7 +28,8 @@ MariaDB y `GameService` son autoritativos. El navegador nunca debe decidir por s
 | Formularios genéricos                 | `public/assets/js/dialogs.js`                               | `public/app.html`, `public/assets/styles.css`                      |
 | Interfaz del Codex                    | `public/assets/js/codex.js`                                 | `src/Http/codex.php`                                               |
 | Canvas, escenario, tokens y encounter | `public/assets/app.js`                                      | `state.js`, `core.js`, `dialogs.js`                                |
-| Renderizado y efectos del d20          | `public/assets/js/dice.js`                                  | eventos de dados en `app.js`, `app.html`, `styles.css`              |
+| Renderizado y efectos del d20          | `public/assets/js/dice.js`                                  | `dice-geometry.js`, `dice-motion.js`, eventos de dados en `app.js`, `styles.css` |
+| Trayectorias físicas del d20            | `bin/generate-dice-trajectories.mjs`                          | `cannon-es`, `dice-geometry.js`, `dice-trajectories.js`             |
 | Estructura visual                     | `public/app.html`                                           | `public/assets/styles.css`                                         |
 | Estilos                               | `public/assets/styles.css`                                  | `public/app.html` y el módulo que genere la clase afectada         |
 | Esquema nuevo                         | nueva migración y `database/schema.sql`                     | código que use la tabla o columna                                  |
@@ -70,7 +71,18 @@ Los módulos tienen estas responsabilidades:
 - `dialogs.js`: formulario modal genérico y ciclo de vida del diálogo.
 - `codex.js`: navegación, búsqueda y edición del Codex.
 - `app.js`: sesión, escenarios, tiempo real, Canvas y encuentros.
-- `dice.js`: geometría 3D, texturas, iluminación y animación del d20; WebGL con alternativa Canvas 2D. Recibe el resultado del servidor, nunca decide la tirada.
+- `dice.js`: texturas, iluminación y reproducción del d20; WebGL con alternativa Canvas 2D. Recibe el resultado del servidor, nunca decide la tirada.
+- `dice-geometry.js`: geometría y simetrías compartidas por el renderizado y el collider.
+- `dice-motion.js`: interpolación de trayectorias físicas, cámara y adaptación al resultado autoritativo.
+- `dice-trajectories.js`: recurso generado con ocho simulaciones de `cannon-es`, no editar a mano. El motor físico es una dependencia de desarrollo, no se carga en el navegador.
+
+### Movimiento del d20
+
+`npm run dice:generate` simula gravedad, fricción y colisiones a 480 Hz y guarda muestras a 60 Hz. La altura inicial es de 4,2–4,95 unidades (un 50 % más que la original) y la restitución es 0,528 (un 10 % más que 0,48). `npm run dice:check` comprueba que el recurso generado es reproducible. Las trayectorias terminan cuando el cuerpo queda dormido sobre una cara, no mediante un giro forzado.
+
+El servidor persiste el resultado y envía `dice.roll.started` seguido de `dice.roll.revealed` en la misma llamada, sin temporizador ni espera artificial. El cliente inicia inmediatamente una trayectoria seleccionada por `rollId`; el estado de preparación solo cubre el tránsito de mensajes. Una simetría del icosaedro aplicada a **todos** los fotogramas sitúa la cara autoritativa arriba sin cambiar numeración ni contactos. Los clientes reproducen la misma trayectoria independientemente de sus FPS. Los efectos y el tiempo de lectura comienzan al alcanzar el reposo. Con movimiento reducido se muestra directamente ese estado final.
+
+Pruebas: `node tests/dice-physics.mjs` valida las ocho trayectorias y sus veinte resultados; `node tests/dice-renderer.mjs` valida renderizado alternativo, ciclo de animación y mensajes. `composer test` incluye `tests/dice-websocket.php`, que comprueba la entrega inmediata, el orden de mensajes, la persistencia y los permisos.
 
 No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app.js`. Si otra sección independiente crece de forma similar, extráela solo cuando tenga un límite funcional claro y pocas dependencias.
 

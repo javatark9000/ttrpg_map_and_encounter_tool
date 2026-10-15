@@ -1081,6 +1081,32 @@ main {
   width: min(19rem, 77vw, 47dvh);
   aspect-ratio: 1;
 }
+#dice-roll-overlay.rolling .d20-stage::before,
+#dice-roll-overlay.rolling .d20-stage::after {
+  content: '';
+  position: absolute;
+  inset: calc(50% - 2.3rem);
+  border: 1px solid #d4bc8730;
+  border-radius: 50%;
+}
+#dice-roll-overlay.rolling .d20-stage::before {
+  content: 'd20';
+  display: grid;
+  place-items: center;
+  color: #d4bc8780;
+  font:
+    1.4rem Georgia,
+    serif;
+}
+#dice-roll-overlay.rolling .d20-stage::after {
+  border-top-color: #d4bc87;
+  animation: dice-preparing 1.2s linear infinite;
+}
+@keyframes dice-preparing {
+  to {
+    transform: rotate(360deg);
+  }
+}
 #dice-roll-canvas,
 #dice-effects-canvas {
   position: absolute;
@@ -1154,7 +1180,8 @@ main {
   .dice-roll-card {
     transition: none;
   }
-  #dice-roll-overlay.revealed .dice-result {
+  #dice-roll-overlay.revealed .dice-result,
+  #dice-roll-overlay.rolling .d20-stage::after {
     animation: none;
   }
 }

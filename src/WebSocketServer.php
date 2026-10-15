@@ -5,7 +5,6 @@ namespace Ttrpg;
 
 use RuntimeException;
 use Workerman\Connection\TcpConnection;
-use Workerman\Timer;
 use Workerman\Worker;
 
 final class WebSocketServer
@@ -125,29 +124,23 @@ final class WebSocketServer
                     throw new RuntimeException('Suscríbete al escenario antes de lanzar.');
                 }
                 $roll = $this->game->startDiceRoll($scenarioId, $user);
+                $revealed = $this->game->revealDiceRoll((int) $roll['id']);
+                if (!$revealed) {
+                    throw new RuntimeException('No se pudo revelar el resultado del dado.');
+                }
+                // The physical trajectory needs the authoritative value before release.
+                // Publish both messages now; the client reveals the face after it rests.
                 $this->broadcastDice($worker, $scenarioId, [
                     'type' => 'dice.roll.started',
                     'scenarioId' => $scenarioId,
                     'rollId' => $roll['id'],
                     'rollerName' => $roll['rollerName'],
-                    'durationMs' => 1500,
                 ]);
-                Timer::add(
-                    1.5,
-                    function () use ($worker, $scenarioId, $roll) {
-                        $revealed = $this->game->revealDiceRoll((int) $roll['id']);
-                        if (!$revealed) {
-                            return;
-                        }
-                        $this->broadcastDice($worker, $scenarioId, [
-                            'type' => 'dice.roll.revealed',
-                            'scenarioId' => $scenarioId,
-                            'data' => $revealed,
-                        ]);
-                    },
-                    [],
-                    false,
-                );
+                $this->broadcastDice($worker, $scenarioId, [
+                    'type' => 'dice.roll.revealed',
+                    'scenarioId' => $scenarioId,
+                    'data' => $revealed,
+                ]);
                 return;
             }
             if ($kind === 'chat.send') {

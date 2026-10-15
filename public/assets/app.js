@@ -592,28 +592,27 @@ function renderChatWindow(win, messages) {
     .join('');
   box.scrollTop = box.scrollHeight;
 }
-function startD20Animation() {
+function startD20Animation(rollId) {
   diceRenderer ||= createD20Renderer($('#dice-roll-canvas'), $('#dice-effects-canvas'));
-  diceRenderer.start();
+  diceRenderer.start(rollId);
 }
 function handleDiceRollStarted(message) {
   if (+message.scenarioId !== +state.scenarioId) return;
   pendingDiceRequestId = null;
   clearTimeout(diceHideTimer);
-  const overlay = $('#dice-roll-overlay'),
-    duration = +message.durationMs || 1500;
+  const overlay = $('#dice-roll-overlay');
   overlay.hidden = false;
   overlay.className = 'rolling';
   overlay.dataset.rollId = String(message.rollId);
-  startD20Animation();
+  startD20Animation(message.rollId);
   $('#dice-roller-name').textContent = `${message.rollerName} lanza un d20`;
-  $('#dice-roll-status').textContent = 'Lanzando…';
+  $('#dice-roll-status').textContent = 'Preparando lanzamiento…';
   $('#dice-roll-value').textContent = '?';
   $('#roll-d20').disabled = true;
   diceHideTimer = setTimeout(() => {
     resetDiceAnimation();
     toast('No se pudo revelar el resultado del dado.');
-  }, duration + 5000);
+  }, 5000);
 }
 function handleDiceRollRevealed(roll) {
   if (+roll.scenario_id !== +state.scenarioId) return;
@@ -623,8 +622,9 @@ function handleDiceRollRevealed(roll) {
   diceHideTimer = null;
   const result = +roll.result;
   overlay.className = 'settling';
-  $('#dice-roll-status').textContent = 'El dado se detiene…';
+  $('#dice-roll-status').textContent = 'Lanzando…';
   diceRenderer?.land(result, () => {
+    if (+overlay.dataset.rollId !== +roll.id || +state.scenarioId !== +roll.scenario_id) return;
     overlay.className = `revealed${result === 20 ? ' critical' : result === 1 ? ' fumble' : ''}`;
     $('#dice-roll-value').textContent = String(result);
     $('#dice-roll-status').textContent =
@@ -633,6 +633,8 @@ function handleDiceRollRevealed(roll) {
         : result === 1
           ? '¡1 natural · Pifia!'
           : `Resultado: ${result}`;
+    // Start the reading time at physical rest, never while the die is still bouncing.
+    diceHideTimer = setTimeout(resetDiceAnimation, result === 1 || result === 20 ? 3200 : 2000);
   });
   if (state.user?.role === 'DM' && state.data) {
     state.data.diceRolls ||= [];
@@ -640,7 +642,6 @@ function handleDiceRollRevealed(roll) {
       state.data.diceRolls.unshift(roll);
     renderDiceRollLog();
   }
-  diceHideTimer = setTimeout(resetDiceAnimation, result === 1 || result === 20 ? 4100 : 2800);
 }
 function resetDiceAnimation() {
   clearTimeout(diceHideTimer);

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import * as geometry from '../public/assets/js/dice-geometry.js';
+import * as motionPlayer from '../public/assets/js/dice-motion.js';
 
 const source = readFileSync(new URL('../public/assets/js/dice.js', import.meta.url), 'utf8');
 let now = 1000;
@@ -52,6 +54,8 @@ function canvas() {
 }
 const motion = { matches: true, addEventListener() {} };
 const context = vm.createContext({
+    ...geometry,
+    ...motionPlayer,
     document: { createElement: canvas },
     devicePixelRatio: 3,
     matchMedia: () => motion,
@@ -67,7 +71,10 @@ const context = vm.createContext({
     canvas: canvas(),
     effectsCanvas: canvas(),
 });
-vm.runInContext(source.replace('export function', 'function'), context);
+vm.runInContext(
+    source.replace(/^import[\s\S]*?;\s*/gm, '').replace('export function', 'function'),
+    context,
+);
 const run = (code) => vm.runInContext(code, context);
 function tick(milliseconds) {
     now += milliseconds;
@@ -84,13 +91,13 @@ assert.ok(
 for (let value = 1; value <= 20; value++) {
     assert.ok(
         run(
-            `dot(transform(rotationMatrix(landingRotation(${value})), faces.find(f=>f.value===${value}).normal),[0,-Math.sin(REST_TILT),Math.cos(REST_TILT)]) > 0.99999`,
+            `dot(transform(rotationMatrix(faceOrientation(${value})), faces.find(f=>f.value===${value}).normal),[0,0,1]) > 0.99999`,
         ),
         `face ${value} lands facing the viewer`,
     );
     assert.ok(
         run(
-            `dot(transform(rotationMatrix(landingRotation(${value})), faces.find(f=>f.value===${value}).up),[0,Math.cos(REST_TILT),Math.sin(REST_TILT)]) > 0.99999`,
+            `dot(transform(rotationMatrix(faceOrientation(${value})), faces.find(f=>f.value===${value}).up),[0,1,0]) > 0.99999`,
         ),
         `number ${value} is upright`,
     );
@@ -103,7 +110,7 @@ assert.ok(
 );
 assert.ok(
     run(
-        `Array.from({length:101},(_,i)=>slerp([0,0,0,1],landingRotation(20),i/100)).every(q=>Math.abs(Math.hypot(...q)-1)<0.00001)`,
+        `Array.from({length:101},(_,i)=>slerp([0,0,0,1],faceOrientation(20),i/100)).every(q=>Math.abs(Math.hypot(...q)-1)<0.00001)`,
     ),
     'slerp preserves a rigid rotation',
 );
@@ -126,19 +133,20 @@ assert.ok(
 
 motion.matches = false;
 run('renderer.start(); renderer.start();');
-assert.equal(scheduled.size, 1, 'repeated starts replace the old loop');
-tick(100);
+assert.equal(scheduled.size, 0, 'preparation does not run fake physics or reveal a face');
 run('renderer.land(20, () => landed++);');
-tick(400);
-assert.equal(run('landed'), 1, 'effects wait for contact');
-tick(400);
+const duration = motionPlayer.createPhysicalThrow(20, 0).duration * 1000;
+assert.equal(scheduled.size, 1, 'one physical playback loop');
+tick(duration - 100);
+assert.equal(run('landed'), 1, 'effects wait for physical sleep, not the first bounce');
+tick(110);
 assert.equal(run('landed'), 2);
 tick(300);
 assert.equal(run('landed'), 2, 'landing callback only fires once');
 tick(2000);
 assert.equal(scheduled.size, 0, 'effects stop when finished');
 run('renderer.start(); renderer.land(1, () => landed++);');
-tick(800);
+tick(duration + 100);
 assert.equal(run('landed'), 3, 'fumble also lands');
 run('renderer.stop();');
 assert.equal(scheduled.size, 0, 'disconnect/scenario switch cancels animation');
@@ -155,13 +163,16 @@ function node(selector) {
     return nodes.get(selector);
 }
 const received = [];
+const seeds = [];
 let landingCallback;
 const timers = new Map();
 const messages = vm.createContext({
     state: { scenarioId: 4, user: { role: 'DM' }, data: {} },
     $: node,
     createD20Renderer: () => ({
-        start() {},
+        start(seed) {
+            seeds.push(seed);
+        },
         stop() {
             landingCallback = null;
         },
@@ -181,26 +192,44 @@ const messages = vm.createContext({
 vm.runInContext(
     'let diceHideTimer=null, diceRenderer=null, pendingDiceRequestId=null;\n' +
         app.slice(
-            app.indexOf('function startD20Animation()'),
+            app.indexOf('function startD20Animation('),
             app.indexOf("$('#roll-d20').onclick"),
         ),
     messages,
 );
 const message = (code) => vm.runInContext(code, messages);
 message('handleDiceRollStarted({scenarioId:4,rollId:8,rollerName:"DM"});');
+assert.equal(
+    [...timers.values()][0].delay,
+    5000,
+    'preparation only has a network failure watchdog',
+);
 message(
     'handleDiceRollRevealed({scenario_id:5,id:8,result:20}); handleDiceRollRevealed({scenario_id:4,id:7,result:20});',
 );
 assert.equal(received.length, 0, 'other scenarios and stale rolls ignored');
 message('handleDiceRollRevealed({scenario_id:4,id:8,result:20});');
-assert.deepEqual(received, [20], 'server result is passed unchanged to the renderer');
+assert.deepEqual(
+    received,
+    [20],
+    'server result starts the renderer immediately, with no client delay',
+);
 assert.equal(node('#dice-roll-overlay').className, 'settling');
+assert.deepEqual(seeds, [8], 'all clients select the same trajectory by roll ID');
+assert.equal(timers.size, 0, 'overlay cannot expire while the die is still rolling');
+const oldCallback = landingCallback;
 landingCallback();
 assert.equal(node('#dice-roll-overlay').className, 'revealed critical');
 assert.equal(node('#dice-roll-value').textContent, '20');
-assert.equal([...timers.values()][0].delay, 4100, 'special result stays readable longer');
+assert.equal([...timers.values()][0].delay, 3200, 'special result stays readable after rest');
 message(
     'resetDiceAnimation(); handleDiceRollStarted({scenarioId:4,rollId:9,rollerName:"DM"}); handleDiceRollRevealed({scenario_id:4,id:9,result:1});',
+);
+oldCallback();
+assert.equal(
+    node('#dice-roll-overlay').className,
+    'settling',
+    'a stale landing cannot reveal a newer roll',
 );
 landingCallback();
 assert.equal(node('#dice-roll-overlay').className, 'revealed fumble');

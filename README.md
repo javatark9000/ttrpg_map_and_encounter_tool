@@ -94,10 +94,15 @@ Si se sirve con otro host/puerto, actualizar `APP_ORIGIN`. Para producción, mod
 
 ## Desarrollo y validación
 
-Instalar las herramientas de formato una vez con `npm ci`. Prettier mantiene legibles los archivos PHP, JavaScript, HTML y CSS.
+Instalar las herramientas de desarrollo una vez con `npm ci` (Node.js 22+). Prettier mantiene legibles los archivos PHP, JavaScript, HTML y CSS.
+
+El movimiento del d20 utiliza trayectorias físicas precalculadas con `cannon-es`. Si se cambia el collider o la configuración física de `bin/generate-dice-trajectories.mjs`, ejecutar `npm run dice:generate` e incluir el recurso generado `public/assets/js/dice-trajectories.js`. No requiere compilar ni cargar un motor físico al desplegar o jugar.
 
 ```bash
 npm run format:check
+npm run dice:check
+node tests/dice-physics.mjs
+node tests/dice-renderer.mjs
 composer test
 composer audit
 find src public bin tests -name '*.php' -print0 | xargs -0 -n1 php -l

@@ -1,11 +1,15 @@
 {
-  "private": true,
-  "scripts": {
-    "format": "prettier --write public src bin tests",
-    "format:check": "prettier --check public src bin tests"
-  },
-  "devDependencies": {
-    "@prettier/plugin-php": "0.24.0",
-    "prettier": "3.5.3"
-  }
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "format": "prettier --write public src bin tests",
+        "format:check": "prettier --check public src bin tests",
+        "dice:generate": "node bin/generate-dice-trajectories.mjs",
+        "dice:check": "node bin/generate-dice-trajectories.mjs --check"
+    },
+    "devDependencies": {
+        "@prettier/plugin-php": "0.24.0",
+        "cannon-es": "0.20.0",
+        "prettier": "3.5.3"
+    }
 }

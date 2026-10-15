@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/turns.php';
+require __DIR__ . '/dice-websocket.php';
 
 use Ttrpg\Auth;
 use Ttrpg\Database;
@@ -520,6 +521,7 @@ try {
         'el objetivo activa el turno retrasado',
     );
 
+    testDiceWebSocket($db, $game, $dm, $player, $guest, $scenarioId);
     testTurnRegressions($db, $game, $dm, $player, $campaign);
 
     $selector = bin2hex(random_bytes(12));
