@@ -499,6 +499,29 @@ function notifyApp(title, body, onClick) {
   stack.append(b);
   setTimeout(() => b.remove(), 9000);
 }
+function confirmToast(title, body) {
+  const stack = $('#notification-stack');
+  if (!stack) return Promise.resolve(confirm(`${title}\n\n${body}`));
+  return new Promise((resolve) => {
+    const card = document.createElement('div');
+    card.className = 'app-notification confirmation-toast';
+    card.setAttribute('role', 'alertdialog');
+    card.setAttribute('aria-modal', 'true');
+    card.innerHTML = `<strong>${esc(title)}</strong><p>${esc(body)}</p><div class="confirmation-actions"><button type="button">No</button><button type="button" class="danger-action">Sí</button></div>`;
+    const [cancel, accept] = card.querySelectorAll('button');
+    const finish = (confirmed) => {
+      card.remove();
+      resolve(confirmed);
+    };
+    cancel.onclick = () => finish(false);
+    accept.onclick = () => finish(true);
+    card.onkeydown = (event) => {
+      if (event.key === 'Escape') finish(false);
+    };
+    stack.append(card);
+    cancel.focus();
+  });
+}
 function focusRequests() {
   activateDmPanelTab('activity', true);
   $('#requests-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -935,6 +958,7 @@ function renderDetails() {
     $('#encounter-log').hidden = !(state.user.role === 'DM' && d.previousEncounterLog);
   if (!state.encounterSelecting) $('#encounter-start').textContent = 'Iniciar combate';
   const encounterState = d.encounter?.state || 'OFF';
+  $('#encounter-actions-menu').hidden = encounterState === 'OFF';
   $('#encounter-prepare').hidden = encounterState !== 'OFF';
   $('#encounter-start').hidden = !['PREPARING', 'PAUSED'].includes(encounterState);
   $('#restart-round').hidden = encounterState !== 'RUNNING';
@@ -1092,8 +1116,20 @@ $('#encounter-current-focus').onclick = () => {
 $('#encounter-prepare').onclick = () => command('encounter.prepare');
 $('#encounter-start').onclick = () => handleEncounterStart();
 $('#encounter-log').onclick = () => downloadEncounterLog();
-$('#encounter-stop').onclick = () => command('encounter.stop');
-$('#restart-round').onclick = () => command('encounter.restart_round');
+$('#encounter-stop').onclick = async () => {
+  const confirmed = await confirmToast(
+    '¿Terminar el encounter?',
+    'Se terminará el encounter actual. Este cambio es irreversible. ¿Deseas continuar?',
+  );
+  if (confirmed) command('encounter.stop');
+};
+$('#restart-round').onclick = async () => {
+  const confirmed = await confirmToast(
+    '¿Reiniciar la ronda?',
+    'Se reiniciará la ronda actual y se limpiarán las esperas. Este cambio es irreversible. ¿Deseas continuar?',
+  );
+  if (confirmed) command('encounter.restart_round');
+};
 $('#turn-rollback').onclick = () => command('turn.rollback');
 $('#turn-next').onclick = () => command('turn.next');
 $('#order-ties').onclick = async () => {
@@ -1933,6 +1969,10 @@ $$('.tool-group').forEach((group) => {
   group
     .querySelectorAll('button')
     .forEach((button) => button.addEventListener('click', () => (group.open = false)));
+});
+document.addEventListener('pointerdown', (event) => {
+  const menu = $('#encounter-actions-menu');
+  if (menu?.open && !menu.contains(event.target)) menu.open = false;
 });
 $('#draw-exit').onclick = () => setDrawingMode(false);
 $('#draw-pen').onclick = () => {

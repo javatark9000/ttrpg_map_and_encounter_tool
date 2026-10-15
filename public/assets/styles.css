@@ -143,8 +143,10 @@ header {
 }
 .layout {
   height: calc(100vh - 52px);
+  min-height: 0;
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr) 270px;
+  grid-template-rows: minmax(0, 1fr);
 }
 .is-dm .layout {
   grid-template-columns: 230px minmax(0, 1fr) 320px;
@@ -166,6 +168,13 @@ aside {
   overflow: auto;
   border-right: 1px solid var(--line);
   padding: 0.8rem;
+}
+#sidebar {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 #right-panel {
   height: 100%;
@@ -272,6 +281,41 @@ aside {
 }
 .panel-section > h2 {
   margin-top: 0.35rem;
+}
+.encounter-control-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.encounter-control-header h2 {
+  margin: 0.35rem 0;
+}
+.encounter-actions-menu {
+  margin-left: auto;
+}
+.encounter-actions-menu summary {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  font-size: 0;
+  line-height: 0;
+}
+.encounter-actions-menu summary::before {
+  display: block;
+  width: 4px;
+  height: 20px;
+  content: '';
+  background:
+    radial-gradient(circle, currentColor 0 2px, transparent 2.2px) center top / 4px 4px no-repeat,
+    radial-gradient(circle, currentColor 0 2px, transparent 2.2px) center / 4px 4px no-repeat,
+    radial-gradient(circle, currentColor 0 2px, transparent 2.2px) center bottom / 4px 4px no-repeat;
+}
+.encounter-actions-menu .tool-group-menu {
+  right: 0;
+  left: auto;
 }
 aside section {
   padding-bottom: 1rem;
@@ -886,8 +930,8 @@ main {
 #notification-stack {
   position: fixed;
   z-index: 30;
+  top: max(1rem, env(safe-area-inset-top));
   right: 1rem;
-  bottom: 1rem;
   display: grid;
   gap: 0.5rem;
   width: min(340px, calc(100vw - 2rem));
@@ -907,6 +951,19 @@ main {
 .app-notification p {
   margin: 0.25rem 0 0;
   color: var(--muted);
+}
+.confirmation-toast {
+  border-color: var(--danger);
+  cursor: default;
+}
+.confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.confirmation-actions button {
+  min-width: 72px;
 }
 #chat-windows {
   position: fixed;
