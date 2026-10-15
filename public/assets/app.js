@@ -8,11 +8,11 @@ import {
 } from './js/dialogs.js';
 import { openNpcCreatureInfo } from './js/codex.js';
 import { state } from './js/state.js';
+import { createD20Renderer } from './js/dice.js';
 
 const DRAW_POINT_MIN_DISTANCE = 0.18;
 let diceHideTimer = null,
-  diceAnimationFrame = null,
-  diceRenderState = null,
+  diceRenderer = null,
   pendingDiceRequestId = null;
 function displayHp(v, t = null) {
   return Math.max(t?.kind === 'PLAYER' || t?.actor_type === 'PLAYER' ? -10 : 0, Number(v ?? 0));
@@ -592,255 +592,9 @@ function renderChatWindow(win, messages) {
     .join('');
   box.scrollTop = box.scrollHeight;
 }
-const D20_VERTICES = (() => {
-  const phi = (1 + Math.sqrt(5)) / 2;
-  return [
-    [-1, phi, 0],
-    [1, phi, 0],
-    [-1, -phi, 0],
-    [1, -phi, 0],
-    [0, -1, phi],
-    [0, 1, phi],
-    [0, -1, -phi],
-    [0, 1, -phi],
-    [phi, 0, -1],
-    [phi, 0, 1],
-    [-phi, 0, -1],
-    [-phi, 0, 1],
-  ].map(normalizeVector);
-})();
-const D20_FACES = [
-  [0, 11, 5],
-  [0, 5, 1],
-  [0, 1, 7],
-  [0, 7, 10],
-  [0, 10, 11],
-  [1, 5, 9],
-  [5, 11, 4],
-  [11, 10, 2],
-  [10, 7, 6],
-  [7, 1, 8],
-  [3, 9, 4],
-  [3, 4, 2],
-  [3, 2, 6],
-  [3, 6, 8],
-  [3, 8, 9],
-  [4, 9, 5],
-  [2, 4, 11],
-  [6, 2, 10],
-  [8, 6, 7],
-  [9, 8, 1],
-].map((indices) => {
-  const center = indices.reduce((sum, index) => addVector(sum, D20_VERTICES[index]), [0, 0, 0]);
-  const normal = faceNormal(indices.map((index) => D20_VERTICES[index]));
-  if (dotVector(center, normal) < 0) indices = [indices[0], indices[2], indices[1]];
-  return { indices, normal: faceNormal(indices.map((index) => D20_VERTICES[index])) };
-});
-function addVector(a, b) {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-}
-function subtractVector(a, b) {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-function crossVector(a, b) {
-  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-}
-function dotVector(a, b) {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-function normalizeVector(vector) {
-  const length = Math.hypot(...vector) || 1;
-  return vector.map((value) => value / length);
-}
-function faceNormal(vertices) {
-  return normalizeVector(
-    crossVector(subtractVector(vertices[1], vertices[0]), subtractVector(vertices[2], vertices[0])),
-  );
-}
-function multiplyMatrix(a, b) {
-  const result = Array(9).fill(0);
-  for (let row = 0; row < 3; row++)
-    for (let column = 0; column < 3; column++)
-      for (let index = 0; index < 3; index++)
-        result[row * 3 + column] += a[row * 3 + index] * b[index * 3 + column];
-  return result;
-}
-function transformVector(matrix, vector) {
-  return [
-    matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2],
-    matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2],
-    matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2],
-  ];
-}
-function rotationMatrix(axis, angle) {
-  const [x, y, z] = normalizeVector(axis),
-    cosine = Math.cos(angle),
-    sine = Math.sin(angle),
-    complement = 1 - cosine;
-  return [
-    cosine + x * x * complement,
-    x * y * complement - z * sine,
-    x * z * complement + y * sine,
-    y * x * complement + z * sine,
-    cosine + y * y * complement,
-    y * z * complement - x * sine,
-    z * x * complement - y * sine,
-    z * y * complement + x * sine,
-    cosine + z * z * complement,
-  ];
-}
-function rollingDiceMatrix(seconds) {
-  return multiplyMatrix(
-    rotationMatrix([0, 0, 1], seconds * 4.1),
-    multiplyMatrix(
-      rotationMatrix([0, 1, 0], seconds * 7.3),
-      rotationMatrix([1, 0, 0], seconds * 5.7),
-    ),
-  );
-}
-function shadeColor(color, amount) {
-  return `rgb(${color.map((component) => Math.round(Math.min(255, component * amount))).join(' ')})`;
-}
-function drawD20(matrix, { lift = 0, scale = 1, result = null } = {}) {
-  const canvas = $('#dice-roll-canvas'),
-    context = canvas?.getContext('2d'),
-    bounds = canvas?.getBoundingClientRect();
-  if (!context || !bounds?.width) return;
-  const ratio = Math.min(devicePixelRatio || 1, 2),
-    width = bounds.width,
-    height = bounds.height;
-  if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
-    canvas.width = Math.round(width * ratio);
-    canvas.height = Math.round(height * ratio);
-  }
-  context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, width, height);
-  const centerX = width / 2,
-    centerY = height / 2 - lift,
-    radius = Math.min(width, height) * 0.37 * scale,
-    cameraDistance = 3.7,
-    transformed = D20_VERTICES.map((vertex) => transformVector(matrix, vertex)),
-    project = (point) => {
-      const perspective = cameraDistance / (cameraDistance - point[2]);
-      return {
-        x: centerX + point[0] * radius * perspective,
-        y: centerY - point[1] * radius * perspective,
-      };
-    },
-    projected = transformed.map(project),
-    light = normalizeVector([-0.45, 0.7, 1]);
-  context.save();
-  context.globalAlpha = 0.5;
-  context.filter = 'blur(7px)';
-  context.fillStyle = '#000';
-  context.beginPath();
-  context.ellipse(centerX, height * 0.87, radius * 0.72, radius * 0.15, 0, 0, Math.PI * 2);
-  context.fill();
-  context.restore();
-  const visibleFaces = D20_FACES.map((face, index) => {
-    const vertices = face.indices.map((vertexIndex) => transformed[vertexIndex]),
-      normal = faceNormal(vertices);
-    return {
-      ...face,
-      index,
-      vertices,
-      normal,
-      depth: vertices.reduce((sum, vertex) => sum + vertex[2], 0) / 3,
-    };
-  })
-    .filter((face) => face.normal[2] > -0.03)
-    .sort((a, b) => a.depth - b.depth);
-  const baseColor = result === 1 ? [133, 48, 43] : result === 20 ? [211, 164, 62] : [173, 108, 42];
-  visibleFaces.forEach((face) => {
-    const points = face.indices.map((index) => projected[index]),
-      brightness = 0.38 + Math.max(0, dotVector(face.normal, light)) * 0.72,
-      variation = 0.92 + (face.index % 3) * 0.05,
-      gradient = context.createLinearGradient(points[0].x, points[0].y, points[2].x, points[2].y);
-    gradient.addColorStop(0, shadeColor(baseColor, Math.min(1.45, brightness * 1.25 * variation)));
-    gradient.addColorStop(1, shadeColor(baseColor, Math.max(0.3, brightness * 0.7 * variation)));
-    context.beginPath();
-    points.forEach((point, index) =>
-      index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y),
-    );
-    context.closePath();
-    context.fillStyle = gradient;
-    context.fill();
-    context.strokeStyle = result === 1 ? '#d9857e' : '#f5d98e';
-    context.lineWidth = Math.max(1, width * 0.007);
-    context.stroke();
-    if (face.normal[2] < 0.1) return;
-    const center = project(
-        face.vertices
-          .reduce((sum, vertex) => addVector(sum, vertex), [0, 0, 0])
-          .map((value) => value / 3),
-      ),
-      isResult = result === face.index + 1 && face.normal[2] > 0.82,
-      edgeAngle = Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x),
-      uprightAngle = Math.cos(edgeAngle) < 0 ? edgeAngle + Math.PI : edgeAngle;
-    context.save();
-    context.translate(center.x, center.y);
-    context.rotate(uprightAngle);
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.font = `800 ${Math.max(9, width * (isResult ? 0.15 : 0.065))}px Georgia, serif`;
-    context.lineJoin = 'round';
-    context.lineWidth = isResult ? 4 : 2.5;
-    context.strokeStyle = '#2c160b';
-    context.fillStyle = '#fff7dc';
-    context.strokeText(String(face.index + 1), 0, 1);
-    context.fillText(String(face.index + 1), 0, 1);
-    context.restore();
-  });
-}
-function stopD20Animation() {
-  if (diceAnimationFrame != null) cancelAnimationFrame(diceAnimationFrame);
-  diceAnimationFrame = null;
-  diceRenderState = null;
-}
 function startD20Animation() {
-  stopD20Animation();
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches,
-    startedAt = performance.now();
-  diceRenderState = { matrix: rollingDiceMatrix(0), result: null };
-  const frame = (now) => {
-    const elapsed = (now - startedAt) / 1000,
-      matrix = reducedMotion ? rollingDiceMatrix(0.35) : rollingDiceMatrix(elapsed);
-    diceRenderState.matrix = matrix;
-    drawD20(matrix, {
-      lift: reducedMotion ? 0 : Math.abs(Math.sin(elapsed * 7.5)) * 8,
-      scale: reducedMotion ? 1 : 0.97 + Math.sin(elapsed * 10) * 0.03,
-    });
-    if (!reducedMotion) diceAnimationFrame = requestAnimationFrame(frame);
-  };
-  frame(startedAt);
-}
-function landD20(result) {
-  const startMatrix = diceRenderState?.matrix || rollingDiceMatrix(0),
-    face = D20_FACES[result - 1],
-    worldNormal = transformVector(startMatrix, face.normal),
-    targetNormal = [0, 0, 1],
-    cross = crossVector(worldNormal, targetNormal),
-    crossLength = Math.hypot(...cross),
-    axis = crossLength < 0.0001 ? [1, 0, 0] : cross.map((value) => value / crossLength),
-    angle = Math.acos(Math.max(-1, Math.min(1, dotVector(worldNormal, targetNormal)))),
-    startedAt = performance.now(),
-    duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 520;
-  if (diceAnimationFrame != null) cancelAnimationFrame(diceAnimationFrame);
-  diceRenderState = { matrix: startMatrix, result };
-  const frame = (now) => {
-    const progress = duration ? Math.min(1, (now - startedAt) / duration) : 1,
-      eased = 1 - Math.pow(1 - progress, 3),
-      matrix = multiplyMatrix(rotationMatrix(axis, angle * eased), startMatrix);
-    diceRenderState.matrix = matrix;
-    drawD20(matrix, {
-      lift: Math.sin(progress * Math.PI) * 12,
-      scale: 1 + Math.sin(progress * Math.PI) * 0.08,
-      result,
-    });
-    if (progress < 1) diceAnimationFrame = requestAnimationFrame(frame);
-    else diceAnimationFrame = null;
-  };
-  frame(startedAt);
+  diceRenderer ||= createD20Renderer($('#dice-roll-canvas'), $('#dice-effects-canvas'));
+  diceRenderer.start();
 }
 function handleDiceRollStarted(message) {
   if (+message.scenarioId !== +state.scenarioId) return;
@@ -868,23 +622,30 @@ function handleDiceRollRevealed(roll) {
   clearTimeout(diceHideTimer);
   diceHideTimer = null;
   const result = +roll.result;
-  overlay.className = `revealed${result === 20 ? ' critical' : result === 1 ? ' fumble' : ''}`;
-  $('#dice-roll-value').textContent = String(result);
-  $('#dice-roll-status').textContent =
-    result === 20 ? '¡20, crítico!' : result === 1 ? '¡1, pifia!' : `Resultado: ${result}`;
-  landD20(result);
+  overlay.className = 'settling';
+  $('#dice-roll-status').textContent = 'El dado se detiene…';
+  diceRenderer?.land(result, () => {
+    overlay.className = `revealed${result === 20 ? ' critical' : result === 1 ? ' fumble' : ''}`;
+    $('#dice-roll-value').textContent = String(result);
+    $('#dice-roll-status').textContent =
+      result === 20
+        ? '¡20 natural · Crítico!'
+        : result === 1
+          ? '¡1 natural · Pifia!'
+          : `Resultado: ${result}`;
+  });
   if (state.user?.role === 'DM' && state.data) {
     state.data.diceRolls ||= [];
     if (!state.data.diceRolls.some((item) => +item.id === +roll.id))
       state.data.diceRolls.unshift(roll);
     renderDiceRollLog();
   }
-  diceHideTimer = setTimeout(resetDiceAnimation, 2200);
+  diceHideTimer = setTimeout(resetDiceAnimation, result === 1 || result === 20 ? 4100 : 2800);
 }
 function resetDiceAnimation() {
   clearTimeout(diceHideTimer);
   diceHideTimer = null;
-  stopD20Animation();
+  diceRenderer?.stop();
   const overlay = $('#dice-roll-overlay');
   if (overlay) {
     overlay.hidden = true;

@@ -280,10 +280,16 @@
     <div id="chat-windows"></div>
     <div id="dice-roll-overlay" role="status" aria-live="assertive" hidden>
       <div class="dice-roll-card">
+        <span class="dice-eyebrow" aria-hidden="true">La suerte está echada</span>
         <p id="dice-roller-name"></p>
         <div class="d20-stage" aria-hidden="true">
+          <canvas id="dice-effects-canvas"></canvas>
           <canvas id="dice-roll-canvas"></canvas>
+        </div>
+        <div class="dice-result" aria-hidden="true">
+          <span class="dice-result-rule"></span>
           <strong id="dice-roll-value">?</strong>
+          <span class="dice-result-rule"></span>
         </div>
         <p id="dice-roll-status">Lanzando d20…</p>
       </div>

@@ -28,6 +28,7 @@ MariaDB y `GameService` son autoritativos. El navegador nunca debe decidir por s
 | Formularios genéricos                 | `public/assets/js/dialogs.js`                               | `public/app.html`, `public/assets/styles.css`                      |
 | Interfaz del Codex                    | `public/assets/js/codex.js`                                 | `src/Http/codex.php`                                               |
 | Canvas, escenario, tokens y encounter | `public/assets/app.js`                                      | `state.js`, `core.js`, `dialogs.js`                                |
+| Renderizado y efectos del d20          | `public/assets/js/dice.js`                                  | eventos de dados en `app.js`, `app.html`, `styles.css`              |
 | Estructura visual                     | `public/app.html`                                           | `public/assets/styles.css`                                         |
 | Estilos                               | `public/assets/styles.css`                                  | `public/app.html` y el módulo que genere la clase afectada         |
 | Esquema nuevo                         | nueva migración y `database/schema.sql`                     | código que use la tabla o columna                                  |
@@ -69,6 +70,7 @@ Los módulos tienen estas responsabilidades:
 - `dialogs.js`: formulario modal genérico y ciclo de vida del diálogo.
 - `codex.js`: navegación, búsqueda y edición del Codex.
 - `app.js`: sesión, escenarios, tiempo real, Canvas y encuentros.
+- `dice.js`: geometría 3D, texturas, iluminación y animación del d20; WebGL con alternativa Canvas 2D. Recibe el resultado del servidor, nunca decide la tirada.
 
 No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app.js`. Si otra sección independiente crece de forma similar, extráela solo cuando tenga un límite funcional claro y pocas dependencias.
 
