@@ -329,6 +329,7 @@ async function openScenario(id) {
   if (state.user.role === 'DM' && isMobileLayout())
     document.body.classList.add('right-panel-collapsed');
   state.scenarioId = +id;
+  state.data = null;
   resetDiceAnimation();
   state.path = [];
   state.drawings = [];
@@ -455,11 +456,8 @@ function updateTurnControls() {
 }
 function handleSnapshot(data) {
   if (+data.scenario.id !== state.scenarioId) return;
-  if (
-    +state.data?.scenario?.id === +data.scenario.id &&
-    +data.scenario.version < +state.data.scenario.version
-  )
-    return;
+  const initialScenarioSnapshot = +state.data?.scenario?.id !== +data.scenario.id;
+  if (!initialScenarioSnapshot && +data.scenario.version < +state.data.scenario.version) return;
   if (state.pendingTurn?.version != null && +data.scenario.version >= state.pendingTurn.version)
     state.pendingTurn = null;
   prepareAnimations(state.data, data);
@@ -468,7 +466,7 @@ function handleSnapshot(data) {
   const pendingMovementIds = new Set((data.pendingMovements || []).map((item) => +item.id));
   if (!pendingMovementIds.has(+state.selectedMovementPreview)) state.selectedMovementPreview = null;
   if (!pendingMovementIds.has(+state.hoveredMovementPreview)) state.hoveredMovementPreview = null;
-  fitVisibleCellsForPlayers();
+  if (initialScenarioSnapshot) fitVisibleCellsForPlayers();
   renderSidebar();
   renderDetails();
   draw();
@@ -1124,9 +1122,19 @@ $('#order-ties').onclick = async () => {
 // Canvas rendering and map coordinates.
 const canvas = $('#map'),
   ctx = canvas.getContext('2d');
+let canvasViewSize = null;
 function resize() {
   const r = canvas.getBoundingClientRect(),
-    dpr = devicePixelRatio || 1;
+    dpr = devicePixelRatio || 1,
+    previous = canvasViewSize,
+    playerCenter =
+      state.user?.role === 'PLAYER' && state.data && previous?.width && previous?.height
+        ? {
+            x: (previous.width / 2 - state.camera.x) / (cellSize * state.camera.z),
+            y: (previous.height / 2 - state.camera.y) / (cellSize * state.camera.z),
+          }
+        : null;
+  canvasViewSize = { width: r.width, height: r.height };
   canvas.width = Math.round(r.width * dpr);
   canvas.height = Math.round(r.height * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1135,8 +1143,10 @@ function resize() {
     state.camera.z = z;
     state.camera.x = r.width / 2 - (+state.followCamera.centerX || 0) * cellSize * z;
     state.camera.y = r.height / 2 - (+state.followCamera.centerY || 0) * cellSize * z;
+  } else if (playerCenter) {
+    state.camera.x = r.width / 2 - playerCenter.x * cellSize * state.camera.z;
+    state.camera.y = r.height / 2 - playerCenter.y * cellSize * state.camera.z;
   }
-  fitVisibleCellsForPlayers();
   draw();
 }
 function foggedCellSet() {
@@ -1161,7 +1171,7 @@ function visibleCellBounds() {
   return maxX < 0 ? null : { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 function fitVisibleCellsForPlayers() {
-  if (state.user?.role === 'DM') return;
+  if (state.user?.role !== 'PLAYER') return;
   const bounds = visibleCellBounds(),
     r = canvas.getBoundingClientRect();
   if (!bounds || !r.width || !r.height) return;
