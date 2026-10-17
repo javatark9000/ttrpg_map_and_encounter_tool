@@ -180,8 +180,8 @@ try {
         jsonOut(['ok' => true]);
     }
     if ($path === '/api/characters' && $method === 'POST') {
-        if ($user['role'] !== 'PLAYER') {
-            throw new RuntimeException('Solo un jugador crea personajes.');
+        if (!in_array($user['role'], ['DM', 'PLAYER'], true)) {
+            throw new RuntimeException('No puedes crear personajes.');
         }
         $cid = (int) ($body['campaignId'] ?? 0);
         assertMember($db, $cid, (int) $user['id']);

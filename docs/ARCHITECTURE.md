@@ -88,7 +88,13 @@ No vuelvas a concentrar funcionalidad del Codex o utilidades compartidas en `app
 
 La vida actual de un personaje jugador es global dentro de `player_characters.current_health`; no pertenece a su colocación en un escenario. `scenario_players` conserva posición, rotación e iniciativa por mapa. Al colocar el mismo personaje en otro escenario mantiene sus últimos PV, y tanto los cambios del DM como la curación del jugador actualizan el valor global.
 
+Tanto `PLAYER` como `DM` pueden poseer, crear, colocar y controlar personajes de jugador. El DM mantiene simultáneamente sus permisos administrativos; las operaciones de jugador validan siempre que `player_characters.owner_id` y `scenario_players.user_id` correspondan a su cuenta. Para el DM, la colocación inicial está en el panel **Personajes propios** y el movimiento posterior usa **Mover aquí…** del Inspector; la barra superior no muestra las herramientas de camino del jugador. **Esperar turno** también vive en ese panel lateral y solo aparece cuando el personaje propio seleccionado es el participante del turno actual.
+
 Los botones de rotación envían incrementos de `±45°`; el servidor bloquea la ficha, acumula el giro sobre el valor persistido y normaliza el resultado. Los NPC nuevos comienzan a `0°` salvo que un cliente solicite explícitamente otra orientación, y sus clones conservan la rotación del original.
+
+### Copia de grupos de NPCs
+
+La selección múltiple del DM habilita **Copiar** cuando contiene al menos dos NPCs. El cliente conserva únicamente el escenario de origen y sus identificadores, por lo que el portapapeles puede utilizarse tras abrir otro mapa. **Pegar** solo aparece mientras exista contenido y envía `tokens.paste` con una casilla de anclaje; se deshabilita durante la solicitud y el portapapeles se limpia únicamente cuando el servidor confirma el pegado. Si la operación falla, permanece disponible para reintentar. `GameService` vuelve a consultar los NPCs, verifica acceso a ambos escenarios, calcula sus posiciones respecto de la esquina superior izquierda del grupo y valida que todos quepan antes de insertar alguno. La operación es atómica y conserva nombre, notas, imagen, criatura del Codex, vida, CA, rotación, iniciativa y visibilidad. Las fichas de jugador no se duplican porque representan personajes globales únicos.
 
 ### Fondos de mapa
 

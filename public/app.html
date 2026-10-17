@@ -62,10 +62,12 @@
             <div id="scenario-list"></div>
             <button id="new-scenario" class="dm-only">＋ Nuevo escenario</button>
           </section>
-          <section id="characters-panel">
-            <h2>Personajes</h2>
+          <section id="characters-panel" class="character-owner-only">
+            <h2>Personajes propios</h2>
             <div id="character-list"></div>
             <button id="new-character">＋ Nuevo personaje</button>
+            <button id="dm-place-character" class="dm-only">Colocar personaje seleccionado</button>
+            <button id="delay-turn" hidden>Esperar turno</button>
           </section>
           <section class="codex-panel">
             <button id="codex-button" type="button">Codex</button>
@@ -83,12 +85,11 @@
           </div>
           <div id="workspace" hidden>
             <nav id="toolbar" aria-label="Herramientas del mapa">
-              <div class="player-toolbar player-only" data-main-tool>
+              <div class="player-toolbar character-owner-only" data-main-tool>
                 <button data-mode="pan" class="active">✋ Mover mapa</button
                 ><button id="draw-mode">✎ Dibujar</button><button data-mode="path">➜ Camino</button
                 ><button id="apply-path">Aplicar</button
-                ><button id="place-character">Colocar</button
-                ><button id="delay-turn">Esperar turno</button>
+                ><button id="place-character">Colocar</button>
               </div>
               <div class="dm-toolbar dm-only">
                 <button
@@ -99,6 +100,7 @@
                 >
                   ⌖ Seleccionar
                 </button>
+                <button id="paste-tokens" data-main-tool hidden disabled>Pegar</button>
                 <details class="tool-group" data-main-tool>
                   <summary>▦ Mapa</summary>
                   <div class="tool-group-menu">
@@ -235,7 +237,7 @@
               <div id="dice-roll-log"></div>
             </section>
           </div>
-          <details class="panel-accordion player-only" open>
+          <details class="panel-accordion character-owner-only" open>
             <summary>
               <span id="player-scenario-title">Escenario</span
               ><span class="accordion-chevron" aria-hidden="true">⌄</span>
@@ -245,7 +247,7 @@
               <p id="player-scenario-status" class="muted"></p>
             </section>
           </details>
-          <section id="player-hp-panel" class="player-only">
+          <section id="player-hp-panel" class="character-owner-only">
             <h2>Vida Actual</h2>
             <div id="player-hp-list"></div>
           </section>

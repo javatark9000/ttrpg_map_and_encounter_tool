@@ -26,6 +26,8 @@ export const state = {
   followCamera: null,
   viewPublishTimer: null,
   cloneSource: null,
+  tokenClipboard: null,
+  pendingPasteRequestId: null,
   lastPendingRequestIds: new Set(),
   selectedMovementPreview: null,
   hoveredMovementPreview: null,

@@ -24,6 +24,9 @@ function formData(form) {
 function isMobileLayout() {
   return typeof matchMedia === 'function' && matchMedia('(max-width:850px)').matches;
 }
+function canUsePlayerCharacters() {
+  return ['DM', 'PLAYER'].includes(state.user?.role);
+}
 
 // Authentication and initial application state.
 $$('[data-auth-tab]').forEach(
@@ -88,7 +91,14 @@ async function start() {
   document.body.classList.toggle('is-guest', me.user.role === 'GUEST');
   $$('.dm-only').forEach((e) => (e.hidden = me.user.role !== 'DM'));
   $$('.player-only').forEach((e) => (e.hidden = me.user.role !== 'PLAYER'));
-  $('#characters-panel').hidden = me.user.role !== 'PLAYER';
+  $$('.character-owner-only').forEach((e) => (e.hidden = !['DM', 'PLAYER'].includes(me.user.role)));
+  [
+    $('#draw-mode'),
+    $('.player-toolbar [data-mode="pan"]'),
+    $('.player-toolbar [data-mode="path"]'),
+    $('#apply-path'),
+    $('#place-character'),
+  ].forEach((control) => (control.hidden = me.user.role === 'DM'));
   $('#encounter-bar').hidden = true;
   if (me.user.role === 'DM') {
     activateDmPanelTab(state.dmPanelTab);
@@ -128,9 +138,20 @@ function renderSidebar() {
     b.onclick = () => openScenario(s.id);
     list.append(b);
   });
-  const chars = $('#character-list');
+  const chars = $('#character-list'),
+    scenarioCampaignId =
+      state.data?.scenario?.campaign_id ||
+      state.bootstrap.scenarios.find((scenario) => +scenario.id === +state.scenarioId)?.campaign_id,
+    characters = state.bootstrap.characters.filter(
+      (character) => !scenarioCampaignId || +character.campaign_id === +scenarioCampaignId,
+    );
+  if (
+    state.selectedCharacter &&
+    !characters.some((character) => +character.id === +state.selectedCharacter)
+  )
+    state.selectedCharacter = null;
   chars.innerHTML = '';
-  state.bootstrap.characters.forEach((c) => {
+  characters.forEach((c) => {
     const b = document.createElement('button'),
       placed =
         state.data &&
@@ -150,6 +171,21 @@ function renderSidebar() {
     };
     chars.append(b);
   });
+  const dmPlaceButton = $('#dm-place-character');
+  if (state.user.role === 'DM') {
+    const selectedPlaced = state.data?.players?.some(
+      (player) =>
+        +player.user_id === +state.user.id &&
+        +player.character_id === +state.selectedCharacter &&
+        +player.placed,
+    );
+    dmPlaceButton.disabled = !state.data || !state.selectedCharacter || selectedPlaced;
+    dmPlaceButton.textContent = selectedPlaced
+      ? 'Personaje ya colocado'
+      : 'Colocar personaje seleccionado';
+  }
+  updateDelayTurnControl();
+  updatePasteControl();
 }
 $('#new-scenario').onclick = async () => {
   const values = await openForm({
@@ -216,14 +252,19 @@ $('#new-character').onclick = async () => {
   });
   if (!values) return;
   try {
-    await api('/characters', {
-      method: 'POST',
-      body: JSON.stringify({
-        campaignId: +state.bootstrap.campaigns[0].id,
-        name: values.name,
-        maxHealth: +values.maxHealth,
-      }),
-    });
+    const scenarioCampaignId =
+        state.data?.scenario?.campaign_id ||
+        state.bootstrap.scenarios.find((scenario) => +scenario.id === +state.scenarioId)
+          ?.campaign_id,
+      created = await api('/characters', {
+        method: 'POST',
+        body: JSON.stringify({
+          campaignId: +(scenarioCampaignId || state.bootstrap.campaigns[0].id),
+          name: values.name,
+          maxHealth: +values.maxHealth,
+        }),
+      });
+    state.selectedCharacter = +created.id;
     await loadBootstrap();
   } catch (e) {
     toast(e.message);
@@ -260,6 +301,7 @@ function connectWs() {
   ws.onopen = () => {
     $('#connection').textContent = 'online';
     $('#connection').className = 'pill online';
+    updatePasteControl();
     if (state.scenarioId) subscribe();
     ws._beat = setInterval(
       () => ws.readyState === 1 && ws.send(JSON.stringify({ action: 'heartbeat' })),
@@ -271,7 +313,9 @@ function connectWs() {
     pendingDiceRequestId = null;
     resetDiceAnimation();
     state.pendingTurn = null;
+    state.pendingPasteRequestId = null;
     updateTurnControls();
+    updatePasteControl();
     $('#connection').textContent = 'offline';
     $('#connection').className = 'pill offline';
     setTimeout(connectWs, 2500);
@@ -286,7 +330,12 @@ function connectWs() {
     else if (m.type === 'draw.event') handleDrawEvent(m.data);
     else if (m.type === 'dice.roll.started') handleDiceRollStarted(m);
     else if (m.type === 'dice.roll.revealed') handleDiceRollRevealed(m.data);
-    else if (m.type === 'command.accepted' && m.requestId === state.pendingTurn?.requestId) {
+    else if (m.type === 'command.accepted' && m.requestId === state.pendingPasteRequestId) {
+      state.pendingPasteRequestId = null;
+      state.tokenClipboard = null;
+      updatePasteControl();
+      toast('Personajes pegados');
+    } else if (m.type === 'command.accepted' && m.requestId === state.pendingTurn?.requestId) {
       state.pendingTurn.version = +m.event.version;
     } else if (m.type === 'command.error') {
       if (m.requestId === pendingDiceRequestId) {
@@ -297,6 +346,10 @@ function connectWs() {
         state.pendingTurn = null;
         updateTurnControls();
         if (state.scenarioId) subscribe();
+      }
+      if (m.requestId === state.pendingPasteRequestId) {
+        state.pendingPasteRequestId = null;
+        updatePasteControl();
       }
       toast(m.error);
     } else if (m.type === 'error') toast(m.error);
@@ -338,6 +391,8 @@ async function openScenario(id) {
   state.selectedObjects.clear();
   state.selectedNpcs.clear();
   state.selectedPlayers.clear();
+  state.cloneSource = null;
+  state.moveToken = null;
   state.lastPendingRequestIds = new Set();
   state.selectedMovementPreview = null;
   state.hoveredMovementPreview = null;
@@ -430,7 +485,7 @@ function generateRequestId() {
 function command(type, payload = {}) {
   if (state.ws?.readyState !== 1) {
     toast('Sin conexión');
-    return;
+    return null;
   }
   const turnCommand = type.startsWith('turn.') || type.startsWith('encounter.');
   const requestId = generateRequestId();
@@ -448,13 +503,35 @@ function command(type, payload = {}) {
       payload: { ...payload, scenarioId: state.scenarioId },
     }),
   );
+  return requestId;
+}
+function selectedCharacterHasTurn() {
+  const controlled = controlledPlayer(),
+    encounter = state.data?.encounter,
+    current = state.data?.participants?.find(
+      (participant) => +participant.id === +encounter?.current_participant_id,
+    );
+  return !!(
+    controlled &&
+    encounter?.state === 'RUNNING' &&
+    current?.actor_type === 'PLAYER' &&
+    current.state === 'ACTIVE' &&
+    +current.actor_id === +controlled.id
+  );
+}
+function updateDelayTurnControl() {
+  const button = $('#delay-turn');
+  if (!button) return;
+  button.hidden = !selectedCharacterHasTurn();
+  button.disabled = !!state.pendingTurn || state.ws?.readyState !== 1;
 }
 function updateTurnControls() {
   $$(
-    '#turn-next, #turn-rollback, #restart-round, #delay-turn, #inspect-end-turn, #encounter-start, #encounter-prepare, #encounter-stop',
+    '#turn-next, #turn-rollback, #restart-round, #inspect-end-turn, #encounter-start, #encounter-prepare, #encounter-stop',
   ).forEach((button) => {
     button.disabled = !!state.pendingTurn || state.ws?.readyState !== 1;
   });
+  updateDelayTurnControl();
 }
 function handleSnapshot(data) {
   if (+data.scenario.id !== state.scenarioId) return;
@@ -763,9 +840,9 @@ function handleEncounterStart() {
 }
 function renderPlayerHp() {
   const list = $('#player-hp-list');
-  if (!list || state.user.role !== 'PLAYER') return;
+  if (!list || !canUsePlayerCharacters()) return;
   const mine = (state.data?.players || []).filter(
-    (p) => +p.user_id === +state.user.id && p.health !== undefined,
+    (p) => +p.user_id === +state.user.id && +p.placed && p.health !== undefined,
   );
   list.innerHTML = mine.length
     ? mine
@@ -1398,7 +1475,7 @@ function drawingColorForToken(t) {
   return t?.drawing_color || fallbackDrawingColor(t?.user_id || t?.character_id || state.user?.id);
 }
 function currentDrawingColor() {
-  if (state.user?.role === 'PLAYER') {
+  if (canUsePlayerCharacters()) {
     const own = controlledPlayer();
     if (own?.drawing_color) return own.drawing_color;
     const ch =
@@ -1645,7 +1722,7 @@ function drawGroup(ts, cs) {
         (t.kind === 'NPC' && state.selectedNpcs.has(+t.id)) ||
         (t.kind === 'PLAYER' && state.selectedPlayers.has(+t.id)) ||
         (t.kind === 'PLAYER' &&
-          state.user.role === 'PLAYER' &&
+          canUsePlayerCharacters() &&
           +t.user_id === +state.user.id &&
           +t.character_id === +state.selectedCharacter);
     if (current) {
@@ -1998,8 +2075,25 @@ function setMode(m, keepPendingAction = false) {
     toast(
       'Arrastra o toca para alternar selección; lo seleccionado se mantiene mientras sigas en Seleccionar',
     );
+  updatePasteControl();
   draw();
 }
+function updatePasteControl() {
+  const button = $('#paste-tokens'),
+    count = state.tokenClipboard?.npcIds?.length || 0,
+    available = state.user?.role === 'DM' && count >= 2;
+  if (!button) return;
+  button.hidden = !available;
+  button.disabled =
+    !state.data || !!state.pendingPasteRequestId || state.ws?.readyState !== WebSocket.OPEN;
+  button.textContent = available ? `Pegar (${count})` : 'Pegar';
+  button.classList.toggle('active', available && state.mode === 'paste');
+}
+$('#paste-tokens').onclick = () => {
+  if (!state.tokenClipboard?.npcIds?.length || !state.data) return;
+  setMode('paste');
+  toast('Toca la casilla donde comenzará el grupo copiado');
+};
 function setDrawingMode(on) {
   state.cloneSource = null;
   state.moveToken = null;
@@ -2010,7 +2104,8 @@ function setDrawingMode(on) {
       (x.hidden =
         on ||
         (x.classList.contains('dm-only') && state.user.role !== 'DM') ||
-        (x.classList.contains('player-only') && state.user.role !== 'PLAYER')),
+        (x.classList.contains('player-only') && state.user.role !== 'PLAYER') ||
+        (x.classList.contains('character-owner-only') && !canUsePlayerCharacters())),
   );
   $$('[data-draw-tool]').forEach(
     (x) => (x.hidden = !on || (+x.classList.contains('dm-only') && state.user.role !== 'DM')),
@@ -2018,6 +2113,7 @@ function setDrawingMode(on) {
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', !on && x.dataset.mode === 'pan'));
   $('#draw-mode').classList.toggle('active', on);
   $('#dm-draw-mode').classList.toggle('active', on);
+  updatePasteControl();
   updateDrawButtons();
   if (!on) sendDraw({ op: 'clearUser' });
   draw();
@@ -2230,7 +2326,8 @@ canvas.onpointermove = (e) => {
       state.drag.longPressTimer = null;
     }
     const touchMapPan =
-      e.pointerType === 'touch' && (['path', 'place'].includes(state.mode) || state.moveToken);
+      e.pointerType === 'touch' &&
+      (['path', 'place', 'paste'].includes(state.mode) || state.moveToken);
     if (state.drag.forcePan || mode === 'pan' || touchMapPan) {
       if (state.user.role !== 'GUEST') {
         state.camera.x = state.drag.cx + dx;
@@ -2274,7 +2371,7 @@ canvas.onpointerup = (e) => {
     selectionOnly = !!was?.forceSelect,
     draft = state.objectDraft,
     selection = state.selectionDraft,
-    touchTap = was && isTouchTap(e, was) && ['place', 'path', 'npc'].includes(mode);
+    touchTap = was && isTouchTap(e, was) && ['place', 'path', 'npc', 'paste'].includes(mode);
   state.pointers.delete(e.pointerId);
   if (was?.longPressTimer) clearTimeout(was.longPressTimer);
   if (state.pointers.size < 2) state.pinch = null;
@@ -2430,6 +2527,14 @@ function tap(x, y, options = {}) {
     selectionOnly = state.user.role === 'DM' && !!options.selectionOnly,
     mode = selectionOnly ? 'select' : state.mode;
   if (!validCell(c)) return;
+  if (!selectionOnly && mode === 'paste' && state.tokenClipboard) {
+    const requestId = command('tokens.paste', { ...state.tokenClipboard, ...c });
+    if (!requestId) return;
+    state.pendingPasteRequestId = requestId;
+    setMode('pan');
+    toast('Pegando personajes…');
+    return;
+  }
   if (!selectionOnly && state.moveToken) {
     const t = state.moveToken;
     state.moveToken = null;
@@ -2530,7 +2635,11 @@ async function placeCharacterAt(c) {
     return;
   }
   if (state.data?.players?.some((p) => +p.character_id === +state.selectedCharacter && +p.placed)) {
-    toast('Ya colocaste este personaje en este escenario. Pide al DM que lo mueva.');
+    toast(
+      state.user.role === 'DM'
+        ? 'Este personaje ya está colocado en el escenario.'
+        : 'Ya colocaste este personaje en este escenario. Pide al DM que lo mueva.',
+    );
     setMode('pan');
     return;
   }
@@ -2842,15 +2951,23 @@ $('#apply-path').onclick = () => {
   state.path = [];
   draw();
 };
-$('#place-character').onclick = () => {
+function beginCharacterPlacement() {
+  if (!state.data) return toast('Abre un escenario antes de colocar el personaje');
   if (!state.selectedCharacter) return toast('Selecciona un personaje en el menú');
   if (state.data?.players?.some((p) => +p.character_id === +state.selectedCharacter && +p.placed))
-    return toast('Ya colocaste este personaje en este escenario. Pide al DM que lo mueva.');
+    return toast(
+      state.user.role === 'DM'
+        ? 'Este personaje ya está colocado en el escenario.'
+        : 'Ya colocaste este personaje en este escenario. Pide al DM que lo mueva.',
+    );
   document.body.classList.remove('menu-open');
   setMode('place');
   toast('Toca una casilla para colocar el personaje');
-};
+}
+$('#place-character').onclick = beginCharacterPlacement;
+$('#dm-place-character').onclick = beginCharacterPlacement;
 $('#delay-turn').onclick = async () => {
+  if (!selectedCharacterHasTurn()) return toast('El personaje seleccionado no tiene el turno');
   const options = state.data.participants.filter(
     (p) =>
       +p.id !== +state.data.encounter?.current_participant_id &&
@@ -2945,11 +3062,7 @@ function selectEntitiesInArea(area) {
   draw();
 }
 function selectMapEntity(entity, additive = false) {
-  if (
-    state.user.role === 'PLAYER' &&
-    entity.kind === 'PLAYER' &&
-    +entity.user_id === +state.user.id
-  ) {
+  if (canUsePlayerCharacters() && entity.kind === 'PLAYER' && +entity.user_id === +state.user.id) {
     state.selectedCharacter = +entity.character_id;
     state.path = [];
     renderSidebar();
@@ -3012,7 +3125,8 @@ function renderEntitySelection() {
     return;
   }
   const objectCount = items.filter((x) => x.kind === 'OBJECT').length,
-    npcCount = items.filter((x) => x.kind === 'NPC').length,
+    copyableNpcs = items.filter((x) => x.kind === 'NPC'),
+    npcCount = copyableNpcs.length,
     refs = items.map((x) => ({ kind: x.kind, id: +x.id })),
     healable = items.filter((x) => x.health !== undefined),
     i = $('#inspector'),
@@ -3022,9 +3136,18 @@ function renderEntitySelection() {
     ]
       .filter(Boolean)
       .join(' y ');
-  i.innerHTML = `<h2>Selección múltiple</h2><div class="token-card"><strong>${summary}</strong><p class="muted">${items.map((x) => esc(x.name)).join(', ')}</p><div class="row">${healable.length ? '<button id="bulk-heal" class="ok-action">Curar</button>' : ''}<button id="bulk-show">Hacer visibles</button><button id="bulk-hide">Ocultar</button><button id="bulk-image">Imagen común…</button><button id="bulk-delete" class="danger-action">Eliminar</button><button id="bulk-clear">Limpiar selección</button></div></div>`;
+  i.innerHTML = `<h2>Selección múltiple</h2><div class="token-card"><strong>${summary}</strong><p class="muted">${items.map((x) => esc(x.name)).join(', ')}</p><div class="row">${copyableNpcs.length >= 2 ? '<button id="bulk-copy">Copiar</button>' : ''}${healable.length ? '<button id="bulk-heal" class="ok-action">Curar</button>' : ''}<button id="bulk-show">Hacer visibles</button><button id="bulk-hide">Ocultar</button><button id="bulk-image">Imagen común…</button><button id="bulk-delete" class="danger-action">Eliminar</button><button id="bulk-clear">Limpiar selección</button></div></div>`;
   activateDmPanelTab('inspector', true);
   i.scrollTop = 0;
+  if ($('#bulk-copy'))
+    $('#bulk-copy').onclick = () => {
+      state.tokenClipboard = {
+        sourceScenarioId: +state.scenarioId,
+        npcIds: copyableNpcs.map((npc) => +npc.id),
+      };
+      updatePasteControl();
+      toast(`${copyableNpcs.length} personajes copiados. Pulsa Pegar aquí o abre otro mapa.`);
+    };
   if ($('#bulk-heal')) $('#bulk-heal').onclick = () => healTokens(healable);
   $('#bulk-show').onclick = () => command('tokens.bulk_update', { items: refs, visible: true });
   $('#bulk-hide').onclick = () => command('tokens.bulk_update', { items: refs, visible: false });

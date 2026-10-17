@@ -16,13 +16,12 @@ final class GameService
             'SELECT c.* FROM campaigns c JOIN campaign_members m ON m.campaign_id=c.id WHERE m.user_id=? ORDER BY c.id',
             [$user['id']],
         );
-        $characters =
-            $user['role'] === 'PLAYER'
-                ? $this->all(
-                    'SELECT p.*,a.path avatar_path,(SELECT sp.token_color FROM scenario_players sp WHERE sp.character_id=p.id AND sp.token_color IS NOT NULL ORDER BY sp.id DESC LIMIT 1) token_color FROM player_characters p LEFT JOIN assets a ON a.id=p.avatar_asset_id WHERE p.owner_id=?',
-                    [$user['id']],
-                )
-                : [];
+        $characters = in_array($user['role'], ['DM', 'PLAYER'], true)
+            ? $this->all(
+                'SELECT p.*,a.path avatar_path,(SELECT sp.token_color FROM scenario_players sp WHERE sp.character_id=p.id AND sp.token_color IS NOT NULL ORDER BY sp.id DESC LIMIT 1) token_color FROM player_characters p LEFT JOIN assets a ON a.id=p.avatar_asset_id WHERE p.owner_id=?',
+                [$user['id']],
+            )
+            : [];
         $scenarioSql =
             'SELECT s.*,a.path background_path,a.mime background_mime FROM scenarios s LEFT JOIN assets a ON a.id=s.background_asset_id WHERE s.campaign_id IN (SELECT campaign_id FROM campaign_members WHERE user_id=?) AND s.is_deleted=0';
         if ($user['role'] !== 'DM') {
@@ -491,6 +490,7 @@ final class GameService
                 'object.create',
                 'objects.bulk_update',
                 'tokens.bulk_update',
+                'tokens.paste',
                 'tokens.delete',
                 'npc.create',
                 'token.update',
@@ -531,6 +531,7 @@ final class GameService
                 'object.create' => $this->createObject($s, $p),
                 'objects.bulk_update' => $this->bulkUpdateObjects($s, $p),
                 'tokens.bulk_update' => $this->bulkUpdateTokens($s, $p),
+                'tokens.paste' => $this->pasteNpcs($s, $user, $p),
                 'tokens.delete' => $this->deleteTokens($s, $p),
                 'npc.create' => $this->createNpc($s, $p, $user),
                 'token.update' => $this->updateToken($s, $p),
@@ -1042,6 +1043,76 @@ final class GameService
         return ['kind' => $kind, 'id' => $id];
     }
 
+    private function pasteNpcs(array $target, array $user, array $p): array
+    {
+        [$anchorX, $anchorY] = $this->coords($target, $p);
+        $sourceScenarioId = (int) ($p['sourceScenarioId'] ?? 0);
+        $source = $this->one('SELECT campaign_id FROM scenarios WHERE id=? AND is_deleted=0', [
+            $sourceScenarioId,
+        ]);
+        if (!$source) {
+            throw new RuntimeException('El mapa de origen ya no está disponible.');
+        }
+        $this->assertMember((int) $source['campaign_id'], (int) $user['id']);
+        $ids = array_values(
+            array_unique(
+                array_filter(
+                    array_map(
+                        fn($id) => (int) $id,
+                        is_array($p['npcIds'] ?? null) ? $p['npcIds'] : [],
+                    ),
+                    fn($id) => $id > 0,
+                ),
+            ),
+        );
+        if (count($ids) < 2 || count($ids) > 500) {
+            throw new RuntimeException('Selecciona entre 2 y 500 personajes para copiar.');
+        }
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $npcs = $this->all(
+            "SELECT * FROM npc_characters WHERE scenario_id=? AND id IN ($placeholders)",
+            array_merge([$sourceScenarioId], $ids),
+        );
+        if (count($npcs) !== count($ids)) {
+            throw new RuntimeException('Uno o más personajes copiados ya no están disponibles.');
+        }
+        $minX = min(array_map(fn($npc) => (int) $npc['x'], $npcs));
+        $minY = min(array_map(fn($npc) => (int) $npc['y'], $npcs));
+        $placements = [];
+        foreach ($npcs as $npc) {
+            $x = $anchorX + (int) $npc['x'] - $minX;
+            $y = $anchorY + (int) $npc['y'] - $minY;
+            if ($x < 0 || $y < 0 || $x >= (int) $target['width'] || $y >= (int) $target['height']) {
+                throw new RuntimeException('El grupo no cabe completo en esa posición.');
+            }
+            $placements[] = [$npc, $x, $y];
+        }
+        $insert = $this->db->prepare(
+            'INSERT INTO npc_characters(scenario_id,name,x,y,notes,image_asset_id,codex_creature_id,health,max_health,armor_class,rotation_degrees,initiative,visible,dead_hidden) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        );
+        $created = [];
+        foreach ($placements as [$npc, $x, $y]) {
+            $insert->execute([
+                $target['id'],
+                $npc['name'],
+                $x,
+                $y,
+                $npc['notes'],
+                $npc['image_asset_id'],
+                $npc['codex_creature_id'],
+                $npc['health'],
+                $npc['max_health'],
+                $npc['armor_class'],
+                $npc['rotation_degrees'],
+                $npc['initiative'],
+                $npc['visible'],
+                $npc['dead_hidden'],
+            ]);
+            $created[] = ['id' => (int) $this->db->lastInsertId(), 'x' => $x, 'y' => $y];
+        }
+        return ['kind' => 'NPC', 'count' => count($created), 'items' => $created];
+    }
+
     private function cloneToken(array $s, array $p): array
     {
         [$x, $y] = $this->coords($s, $p);
@@ -1262,8 +1333,8 @@ final class GameService
     // Player placement and movement.
     private function placePlayer(array $s, array $u, array $p): array
     {
-        if ($u['role'] !== 'PLAYER') {
-            throw new RuntimeException('Solo los jugadores se colocan.');
+        if (!in_array($u['role'], ['DM', 'PLAYER'], true)) {
+            throw new RuntimeException('No puedes colocar personajes.');
         }
         if (!$s['active']) {
             throw new RuntimeException('El escenario no está activo.');
@@ -1332,7 +1403,7 @@ final class GameService
     }
     private function submitMovement(array $s, array $u, array $p): array
     {
-        if ($u['role'] !== 'PLAYER') {
+        if (!in_array($u['role'], ['DM', 'PLAYER'], true)) {
             throw new RuntimeException('Movimiento de jugador inválido.');
         }
         $characterId = (int) ($p['characterId'] ?? 0);
@@ -2103,7 +2174,7 @@ final class GameService
 
     private function playerRotate(int $sid, array $user, array $p): array
     {
-        if ($user['role'] !== 'PLAYER') {
+        if (!in_array($user['role'], ['DM', 'PLAYER'], true)) {
             throw new RuntimeException('Rotación de jugador inválida.');
         }
         $id = (int) ($p['id'] ?? 0);
