@@ -108,8 +108,27 @@ async function start() {
   if (me.user.role === 'GUEST') {
     $('#empty h1').textContent = 'Esperando al DM';
     $('#empty p').textContent = 'El mapa aparecerá cuando el DM comparta un escenario activo.';
-  } else if (state.bootstrap.scenarios.length) {
-    await openScenario(state.bootstrap.scenarios[0].id);
+  } else {
+    let lastScenarioId = null;
+    try {
+      lastScenarioId = Number(localStorage.getItem(`ttrpg:last-scenario:${me.user.id}`));
+    } catch {
+      // El almacenamiento puede estar bloqueado; la elección manual sigue disponible.
+    }
+    const lastScenario = state.bootstrap.scenarios.find(
+      (scenario) =>
+        +scenario.id === lastScenarioId && (me.user.role === 'DM' || +scenario.active === 1),
+    );
+    if (lastScenario) {
+      try {
+        await openScenario(lastScenario.id);
+      } catch (error) {
+        toast(error.message);
+        navigate('worlds');
+      }
+    } else {
+      navigate('worlds');
+    }
   }
   connectWs();
 }
@@ -470,6 +489,13 @@ async function openScenario(id) {
     $('#empty').hidden = true;
     resize();
     handleSnapshot(data);
+    if (state.user.role !== 'GUEST') {
+      try {
+        localStorage.setItem(`ttrpg:last-scenario:${state.user.id}`, String(id));
+      } catch {
+        // No impedir abrir el mapa si el navegador no permite recordar la selección.
+      }
+    }
     if (state.ws?.readyState === 1) subscribe();
   } catch (error) {
     if (+state.scenarioId !== +id) return;
