@@ -159,6 +159,14 @@ final class GameService
             'cellNotes' => $notes,
             'diceRolls' => $diceRolls,
             'previousEncounterLog' => $previousEncounterLog,
+            'canRollbackTurn' =>
+                $user['role'] === 'DM' &&
+                $encounter &&
+                $encounter['state'] === 'RUNNING' &&
+                (bool) $this->one(
+                    'SELECT id FROM encounter_turn_history WHERE encounter_id=? LIMIT 1',
+                    [$encounter['id']],
+                ),
         ];
     }
 
@@ -511,6 +519,7 @@ final class GameService
                 'turn.rollback',
                 'turn.delay_order',
                 'health.set',
+                'player.health.set',
                 'cell.note',
                 'player.note',
             ];
@@ -1434,6 +1443,15 @@ final class GameService
         if (!is_array($path) || count($path) < 1 || count($path) > 3600) {
             throw new RuntimeException('Camino inválido.');
         }
+        $fogged = [];
+        if ($u['role'] === 'PLAYER') {
+            foreach (
+                $this->all('SELECT x,y FROM scenario_fog_cells WHERE scenario_id=?', [$s['id']])
+                as $cell
+            ) {
+                $fogged[$cell['x'] . ',' . $cell['y']] = true;
+            }
+        }
         $prev = [(int) $sp['x'], (int) $sp['y']];
         $needs = false;
         $clean = [];
@@ -1443,6 +1461,11 @@ final class GameService
             $dy = abs($y - $prev[1]);
             if (max($dx, $dy) !== 1) {
                 throw new RuntimeException('Las casillas del camino deben ser contiguas.');
+            }
+            if (isset($fogged[$x . ',' . $y])) {
+                throw new RuntimeException(
+                    'No puedes trazar un camino por casillas ocultas por la niebla.',
+                );
             }
             $clean[] = ['x' => $x, 'y' => $y];
             $prev = [$x, $y];
@@ -1558,6 +1581,14 @@ final class GameService
     }
     private function encounterStart(int $sid, array $p = []): array
     {
+        // The visual draft is local. Replace the confirmed encounter only on submission,
+        // inside command()'s transaction, so invalid selections preserve the previous fight.
+        if (!empty($p['prepare'])) {
+            if (!isset($p['participants']) || !is_array($p['participants'])) {
+                throw new RuntimeException('Selecciona los participantes del encuentro.');
+            }
+            $this->encounterPrepare($sid);
+        }
         $e = $this->one('SELECT * FROM encounters WHERE scenario_id=? FOR UPDATE', [$sid]);
         if (!$e || !in_array($e['state'], ['PREPARING', 'PAUSED'])) {
             throw new RuntimeException('Primero prepara el encounter.');
@@ -2144,6 +2175,9 @@ final class GameService
 
     private function playerHealthSet(int $sid, array $user, array $p): array
     {
+        if ($user['role'] !== 'DM') {
+            throw new RuntimeException('La curación es exclusiva del DM.');
+        }
         $id = (int) ($p['id'] ?? 0);
         $health = (int) ($p['health'] ?? 0);
         $row = $this->one(

@@ -6,7 +6,19 @@ import {
   openForm,
   releaseDialog,
 } from './js/dialogs.js';
-import { openNpcCreatureInfo } from './js/codex.js';
+import { openNpcCreatureInfo, openCodexLibrary } from './js/codex.js';
+import {
+  icon,
+  avatar,
+  updateList,
+  initInterface,
+  navigate,
+  setEncounterOpen,
+  setEncounterTab,
+  showInspector,
+  refreshInterface,
+  setRequestsOpen,
+} from './js/interface.js';
 import { state } from './js/state.js';
 import { createD20Renderer } from './js/dice.js';
 
@@ -20,9 +32,6 @@ function displayHp(v, t = null) {
 }
 function formData(form) {
   return Object.fromEntries(new FormData(form));
-}
-function isMobileLayout() {
-  return typeof matchMedia === 'function' && matchMedia('(max-width:850px)').matches;
 }
 function canUsePlayerCharacters() {
   return ['DM', 'PLAYER'].includes(state.user?.role);
@@ -89,30 +98,19 @@ async function start() {
   document.body.classList.toggle('is-dm', me.user.role === 'DM');
   document.body.classList.toggle('is-player', me.user.role === 'PLAYER');
   document.body.classList.toggle('is-guest', me.user.role === 'GUEST');
-  $$('.dm-only').forEach((e) => (e.hidden = me.user.role !== 'DM'));
-  $$('.player-only').forEach((e) => (e.hidden = me.user.role !== 'PLAYER'));
+  if (me.user.role !== 'DM') $$('.dm-only').forEach((element) => (element.hidden = true));
+  if (me.user.role !== 'PLAYER') $$('.player-only').forEach((element) => (element.hidden = true));
   $$('.character-owner-only').forEach((e) => (e.hidden = !['DM', 'PLAYER'].includes(me.user.role)));
-  [
-    $('#draw-mode'),
-    $('.player-toolbar [data-mode="pan"]'),
-    $('.player-toolbar [data-mode="path"]'),
-    $('#apply-path'),
-    $('#place-character'),
-  ].forEach((control) => (control.hidden = me.user.role === 'DM'));
-  $('#encounter-bar').hidden = true;
-  if (me.user.role === 'DM') {
-    activateDmPanelTab(state.dmPanelTab);
-    if (isMobileLayout()) document.body.classList.add('right-panel-collapsed');
-  }
-  if (me.user.role === 'GUEST') {
-    $('[data-mode="pan"]').hidden = true;
-    $('#zoom-in').hidden = true;
-    $('#zoom-out').hidden = true;
-    $('#zoom-label').hidden = true;
-    $('#empty h2').textContent = 'Esperando al DM';
-    $('#empty p').textContent = 'El mapa aparecerá cuando el DM visualice un escenario activo.';
-  }
+  $$('.authenticated-only').forEach((element) => (element.hidden = me.user.role === 'GUEST'));
+  $$('.guest-only').forEach((element) => (element.hidden = me.user.role !== 'GUEST'));
   await loadBootstrap();
+  navigate('map');
+  if (me.user.role === 'GUEST') {
+    $('#empty h1').textContent = 'Esperando al DM';
+    $('#empty p').textContent = 'El mapa aparecerá cuando el DM comparta un escenario activo.';
+  } else if (state.bootstrap.scenarios.length) {
+    await openScenario(state.bootstrap.scenarios[0].id);
+  }
   connectWs();
 }
 async function loadBootstrap() {
@@ -129,63 +127,82 @@ function controlledPlayer() {
   );
 }
 function renderSidebar() {
-  const list = $('#scenario-list');
-  list.innerHTML = '';
-  state.bootstrap.scenarios.forEach((s) => {
-    const b = document.createElement('button');
-    b.className = 'scenario-item' + (s.id === state.scenarioId ? ' active' : '');
-    b.innerHTML = `<span>${esc(s.name)}</span>${s.active ? '<span class="dot">●</span>' : ''}`;
-    b.onclick = () => openScenario(s.id);
-    list.append(b);
-  });
-  const chars = $('#character-list'),
-    scenarioCampaignId =
-      state.data?.scenario?.campaign_id ||
-      state.bootstrap.scenarios.find((scenario) => +scenario.id === +state.scenarioId)?.campaign_id,
-    characters = state.bootstrap.characters.filter(
-      (character) => !scenarioCampaignId || +character.campaign_id === +scenarioCampaignId,
-    );
-  if (
-    state.selectedCharacter &&
-    !characters.some((character) => +character.id === +state.selectedCharacter)
-  )
+  const scenarios = state.bootstrap.scenarios;
+  $('#scenario-count').textContent = String(scenarios.length);
+  updateList(
+    $('#scenario-list'),
+    scenarios.length
+      ? scenarios
+          .map(
+            (s) =>
+              `<article class="b-world-entry ${state.user.role === 'DM' ? 'has-settings' : ''} ${+s.id === state.scenarioId ? 'is-current' : ''}"><button type="button" id="scene-open-${+s.id}" data-open-scenario="${+s.id}" class="b-world-open"><span><strong class="b-world-name">${esc(s.name)}</strong><span class="b-world-meta"><span class="b-world-status ${s.active ? 'is-active' : ''}">${s.active ? 'Activo' : 'En preparación'}</span><span>${+s.width} × ${+s.height}</span>${+s.id === state.scenarioId ? '<span class="b-world-current">Actual</span>' : ''}</span></span>${icon('chevron')}</button>${state.user.role === 'DM' ? `<button type="button" id="scene-settings-${+s.id}" data-scenario-settings="${+s.id}" class="icon-button" aria-label="Administrar ${esc(s.name)}">${icon('settings')}</button>` : ''}</article>`,
+          )
+          .join('')
+      : '<div class="empty-state"><h3>Sin escenarios activos</h3><p>Los mapas disponibles aparecerán aquí.</p></div>',
+  );
+  $$('[data-open-scenario]').forEach(
+    (button) =>
+      (button.onclick = () =>
+        openScenario(+button.dataset.openScenario).catch((error) => toast(error.message))),
+  );
+  $$('[data-scenario-settings]').forEach(
+    (button) =>
+      (button.onclick = async () => {
+        try {
+          await openScenario(+button.dataset.scenarioSettings);
+          $('#scenario-dialog').showModal();
+        } catch (error) {
+          toast(error.message);
+        }
+      }),
+  );
+  const characters = state.bootstrap.characters;
+  if (state.selectedCharacter && !characters.some((c) => +c.id === +state.selectedCharacter))
     state.selectedCharacter = null;
-  chars.innerHTML = '';
-  characters.forEach((c) => {
-    const b = document.createElement('button'),
-      placed =
-        state.data &&
-        +state.data.scenario?.id === +state.scenarioId &&
-        state.data.players.some(
-          (p) => +p.user_id === +state.user.id && +p.character_id === +c.id && +p.placed,
-        );
-    b.textContent = `${c.name} (${c.max_health} PV)${placed ? ' · en mapa' : ''}`;
-    b.classList.toggle('active', state.selectedCharacter === +c.id);
-    b.onclick = () => {
-      state.selectedCharacter = +c.id;
-      state.path = [];
-      document.body.classList.remove('menu-open');
-      renderSidebar();
-      draw();
-      toast(`Controlando a ${c.name}`);
-    };
-    chars.append(b);
-  });
-  const dmPlaceButton = $('#dm-place-character');
-  if (state.user.role === 'DM') {
-    const selectedPlaced = state.data?.players?.some(
-      (player) =>
-        +player.user_id === +state.user.id &&
-        +player.character_id === +state.selectedCharacter &&
-        +player.placed,
-    );
-    dmPlaceButton.disabled = !state.data || !state.selectedCharacter || selectedPlaced;
-    dmPlaceButton.textContent = selectedPlaced
-      ? 'Personaje ya colocado'
-      : 'Colocar personaje seleccionado';
+  updateList(
+    $('#character-list'),
+    characters.length
+      ? characters
+          .map((c) => {
+            const player = state.data?.players.find((p) => +p.character_id === +c.id && +p.placed);
+            const hp = player?.health ?? c.current_health ?? c.max_health;
+            const canPlace = state.data && +state.data.scenario.campaign_id === +c.campaign_id;
+            return `<article class="character-card ${state.selectedCharacter === +c.id ? 'is-selected' : ''}"><div class="character-heading">${avatar(c)}<h2>${esc(c.name)}</h2></div><div class="health-value">${displayHp(hp, { kind: 'PLAYER' })} <small>/ ${+c.max_health} PV</small></div><div class="health-track"><i style="--health:${Math.max(0, Math.min(100, (+hp / Math.max(1, +c.max_health)) * 100))}%"></i></div><div class="character-card-actions"><button type="button" class="primary" id="character-place-${+c.id}" data-character-place="${+c.id}" ${canPlace ? '' : 'disabled'}>${icon(player ? 'map' : 'plus')}${player ? 'Ver en el mapa' : 'Colocar'}</button><button type="button" id="character-avatar-${+c.id}" data-character-avatar="${+c.id}">${icon('pen')}Personalizar</button></div>${!canPlace ? '<p class="muted">Abre un escenario de su campaña para colocar la ficha.</p>' : ''}</article>`;
+          })
+          .join('')
+      : '<div class="empty-state"><h3>Aún no tienes personajes</h3><p>Crea tu primer personaje para unirte a la mesa.</p></div>',
+  );
+  $$('[data-character-place]').forEach(
+    (button) =>
+      (button.onclick = () => {
+        state.selectedCharacter = +button.dataset.characterPlace;
+        state.path = [];
+        navigate('map');
+        const player = controlledPlayer();
+        if (player) {
+          selectMapEntity({ ...player, kind: 'PLAYER' });
+          centerToken(player);
+        } else beginCharacterPlacement();
+        renderSidebar();
+      }),
+  );
+  $$('[data-character-avatar]').forEach(
+    (button) =>
+      (button.onclick = () => {
+        state.selectedCharacter = +button.dataset.characterAvatar;
+        openImagePicker('avatar');
+      }),
+  );
+  if (!state.data) {
+    $('#empty h1').textContent = scenarios.length ? 'Elige un escenario' : 'Sin escenarios activos';
+    $('#empty p').textContent =
+      state.user.role === 'DM'
+        ? 'Abre Mundos para crear o elegir un escenario.'
+        : 'Tus personajes y el Codex siguen disponibles mientras el DM prepara la mesa.';
   }
   updateDelayTurnControl();
   updatePasteControl();
+  refreshInterface();
 }
 $('#new-scenario').onclick = async () => {
   const values = await openForm({
@@ -270,24 +287,20 @@ $('#new-character').onclick = async () => {
     toast(e.message);
   }
 };
-$('#menu-btn').onclick = () => document.body.classList.toggle('menu-open');
-$('#right-panel-toggle').onclick = () => document.body.classList.toggle('right-panel-collapsed');
-
-function activateDmPanelTab(name, expand = false) {
-  if (state.user?.role !== 'DM') return;
-  state.dmPanelTab = name;
-  $$('[data-dm-panel-tab]').forEach((button) =>
-    button.classList.toggle('active', button.dataset.dmPanelTab === name),
-  );
-  $$('[data-dm-panel]').forEach((panel) => (panel.hidden = panel.dataset.dmPanel !== name));
-  if (expand) document.body.classList.remove('right-panel-collapsed');
+function activateDmPanelTab(name) {
+  if (name === 'encounter') {
+    setEncounterOpen(true);
+    setEncounterTab('order');
+  } else if (name === 'inspector') showInspector(true);
 }
-$$('[data-dm-panel-tab]').forEach(
-  (button) => (button.onclick = () => activateDmPanelTab(button.dataset.dmPanelTab, true)),
-);
-$$('#dm-scenario-menu button').forEach((button) =>
-  button.addEventListener('click', () => ($('#dm-scenario-menu').open = false)),
-);
+$('#table-tools-open').onclick = () => {
+  $('#session-menu').open = false;
+  $('#clear-map-fog').disabled = !state.data;
+  $('#encounter-log').disabled = !state.data;
+  renderDiceRollLog();
+  $('#table-tools-dialog').showModal();
+};
+$('#table-tools-close').onclick = () => $('#table-tools-dialog').close();
 
 // Realtime synchronization, chat, and encounter panels.
 function wsUrl() {
@@ -299,7 +312,8 @@ function connectWs() {
   const ws = new WebSocket(wsUrl());
   state.ws = ws;
   ws.onopen = () => {
-    $('#connection').textContent = 'online';
+    $('#connection').textContent = 'En línea';
+    updateTurnControls();
     $('#connection').className = 'pill online';
     updatePasteControl();
     if (state.scenarioId) subscribe();
@@ -314,9 +328,14 @@ function connectWs() {
     resetDiceAnimation();
     state.pendingTurn = null;
     state.pendingPasteRequestId = null;
+    state.pendingMovementRequestId = null;
+    state.draftRequestId = null;
     updateTurnControls();
     updatePasteControl();
-    $('#connection').textContent = 'offline';
+    $('#connection').textContent = 'Sin conexión · reconectando';
+    $('#encounter-error').textContent =
+      'Sin conexión. Espera a la reconexión para enviar acciones.';
+    $('#encounter-error').hidden = false;
     $('#connection').className = 'pill offline';
     setTimeout(connectWs, 2500);
   };
@@ -337,13 +356,25 @@ function connectWs() {
       toast('Personajes pegados');
     } else if (m.type === 'command.accepted' && m.requestId === state.pendingTurn?.requestId) {
       state.pendingTurn.version = +m.event.version;
+      if (+state.data?.scenario?.version >= +m.event.version) handleSnapshot(state.data);
+    } else if (m.type === 'command.accepted' && m.requestId === state.pendingMovementRequestId) {
+      state.pendingMovementRequestId = null;
+      state.selectedMovementPreview = null;
+      refreshInterface();
     } else if (m.type === 'command.error') {
+      if (m.requestId === state.pendingMovementRequestId) {
+        state.pendingMovementRequestId = null;
+        renderMovementRequests();
+      }
       if (m.requestId === pendingDiceRequestId) {
         pendingDiceRequestId = null;
         $('#roll-d20').disabled = false;
       }
       if (m.requestId === state.pendingTurn?.requestId) {
         state.pendingTurn = null;
+        state.draftRequestId = null;
+        $('#encounter-error').textContent = m.error;
+        $('#encounter-error').hidden = false;
         updateTurnControls();
         if (state.scenarioId) subscribe();
       }
@@ -364,9 +395,24 @@ async function syncScenarioList() {
     state.selectedObjects.clear();
     state.selectedNpcs.clear();
     $('#workspace').hidden = true;
-    $('#right-panel').hidden = true;
+    state.selectedPlayers.clear();
+    state.inspected = null;
+    state.inspectorOpen = false;
+    state.selectedMovementPreview = null;
+    state.lastPublicRoll = null;
+    state.chatThreads = [];
+    state.drawings = [];
+    state.drawStroke = null;
+    state.images.clear();
+    state.openChats.clear();
+    $('#chat-windows').innerHTML = '';
+    $('#scenario-dialog').close();
+    $('#table-tools-dialog').close();
+    setEncounterOpen(false);
+    setRequestsOpen(false);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     $('#empty').hidden = false;
-    $('#empty h2').textContent = 'Mapa no disponible';
+    $('#empty h1').textContent = 'Mapa no disponible';
     $('#empty p').textContent =
       state.user.role === 'DM'
         ? 'El mapa fue eliminado/ocultado.'
@@ -379,9 +425,16 @@ async function syncScenarioList() {
     state.ws.send(JSON.stringify({ action: 'guest.view.get' }));
 }
 async function openScenario(id) {
+  navigate('map');
+  if (+state.scenarioId === +id && state.data) return;
   state.pendingTurn = null;
-  if (state.user.role === 'DM' && isMobileLayout())
-    document.body.classList.add('right-panel-collapsed');
+  state.pendingMovementRequestId = null;
+  cancelEncounterDraft();
+  setEncounterOpen(false);
+  state.inspected = null;
+  state.inspectorOpen = false;
+  state.lastPublicRoll = null;
+  $('#public-roll').innerHTML = '';
   state.scenarioId = +id;
   state.data = null;
   resetDiceAnimation();
@@ -405,22 +458,26 @@ async function openScenario(id) {
   state.followCamera = null;
   state.camera = { x: 30, y: state.user.role === 'DM' ? 30 - cellSize * 5 : 30, z: 1 };
   renderSidebar();
-  document.body.classList.remove('menu-open');
-  $('#empty').hidden = true;
-  $('#workspace').hidden = false;
-  $('#right-panel').hidden = false;
-  resize();
-  if (state.ws?.readyState === 1) subscribe();
-  else {
-    try {
-      state.data = await api(`/scenarios/${id}/snapshot`);
-      fitVisibleCellsForPlayers();
-      renderSidebar();
-      renderDetails();
-      draw();
-    } catch (e) {
-      toast(e.message);
-    }
+  $('#empty').hidden = false;
+  $('#empty h1').textContent = 'Cargando escenario…';
+  $('#empty p').textContent = 'Recuperando el estado de la mesa.';
+  $('#workspace').hidden = true;
+  refreshInterface();
+  try {
+    const data = await api(`/scenarios/${id}/snapshot`);
+    if (+state.scenarioId !== +id) return;
+    $('#workspace').hidden = false;
+    $('#empty').hidden = true;
+    resize();
+    handleSnapshot(data);
+    if (state.ws?.readyState === 1) subscribe();
+  } catch (error) {
+    if (+state.scenarioId !== +id) return;
+    state.scenarioId = null;
+    $('#empty h1').textContent = 'No se pudo abrir el escenario';
+    $('#empty p').textContent = error.message;
+    refreshInterface();
+    throw error;
   }
 }
 function subscribe() {
@@ -445,7 +502,6 @@ function applySharedCamera(camera) {
   state.camera.z = z;
   state.camera.x = r.width / 2 - (+camera.centerX || 0) * cellSize * z;
   state.camera.y = r.height / 2 - (+camera.centerY || 0) * cellSize * z;
-  $('#zoom-label').textContent = Math.round(z * 100) + '%';
   draw();
 }
 async function followDmView(message) {
@@ -492,7 +548,8 @@ function command(type, payload = {}) {
   if (turnCommand) {
     if (state.pendingTurn || !state.data) return;
     payload = { ...payload, expectedVersion: +state.data.scenario.version };
-    state.pendingTurn = { requestId, scenarioId: state.scenarioId, version: null };
+    state.pendingTurn = { requestId, scenarioId: state.scenarioId, version: null, type };
+    $('#encounter-error').hidden = true;
     updateTurnControls();
   }
   state.ws.send(
@@ -529,30 +586,56 @@ function updateTurnControls() {
   $$(
     '#turn-next, #turn-rollback, #restart-round, #inspect-end-turn, #encounter-start, #encounter-prepare, #encounter-stop',
   ).forEach((button) => {
-    button.disabled = !!state.pendingTurn || state.ws?.readyState !== 1;
+    button.disabled =
+      !!state.pendingTurn ||
+      state.ws?.readyState !== 1 ||
+      (button.id === 'turn-rollback' && !state.data?.canRollbackTurn);
   });
+  $('#encounter-start').textContent = state.draftRequestId ? 'Iniciando…' : 'Iniciar encuentro';
+  $('#encounter-cancel').disabled = !!state.draftRequestId;
+  $('#encounter-prepare-another').disabled = !!state.pendingTurn || state.ws?.readyState !== 1;
   updateDelayTurnControl();
 }
 function handleSnapshot(data) {
   if (+data.scenario.id !== state.scenarioId) return;
   const initialScenarioSnapshot = +state.data?.scenario?.id !== +data.scenario.id;
   if (!initialScenarioSnapshot && +data.scenario.version < +state.data.scenario.version) return;
-  if (state.pendingTurn?.version != null && +data.scenario.version >= state.pendingTurn.version)
+  if (state.pendingTurn?.version != null && +data.scenario.version >= state.pendingTurn.version) {
+    if (state.pendingTurn.requestId === state.draftRequestId) {
+      state.draftRequestId = null;
+      cancelEncounterDraft();
+      setEncounterTab('order');
+    }
     state.pendingTurn = null;
+  }
   prepareAnimations(state.data, data);
   const prev = state.lastPendingRequestIds;
   state.data = data;
+  if (state.user?.role === 'PLAYER' && state.path.length) {
+    const fogged = foggedCellSet();
+    if (state.path.some((cell) => fogged.has(blockedKey(cell)))) {
+      state.path = [];
+      toast('La niebla oculta parte del recorrido. Vuelve a trazar el camino.');
+    }
+  }
   const pendingMovementIds = new Set((data.pendingMovements || []).map((item) => +item.id));
   if (!pendingMovementIds.has(+state.selectedMovementPreview)) state.selectedMovementPreview = null;
   if (!pendingMovementIds.has(+state.hoveredMovementPreview)) state.hoveredMovementPreview = null;
   if (initialScenarioSnapshot) fitVisibleCellsForPlayers();
+  if (state.inspected && !inspectedToken()) {
+    state.inspected = null;
+    state.inspectorOpen = false;
+    if ($('#inspector').contains($('#delay-turn'))) $('#own-turn-actions').append($('#delay-turn'));
+    $('#inspector').innerHTML = '';
+  }
+  if (!state.encounterSelecting) selectionItems();
   renderSidebar();
   renderDetails();
   draw();
   if (state.user?.role === 'DM') {
     const pending = new Set((data.pendingMovements || []).map((x) => +x.id));
     for (const r of data.pendingMovements || [])
-      if (!prev.has(+r.id))
+      if (!initialScenarioSnapshot && !prev.has(+r.id))
         notifyApp(`Solicitud de ${r.user_name}`, r.reason || 'Movimiento pendiente', focusRequests);
     state.lastPendingRequestIds = pending;
   }
@@ -578,32 +661,17 @@ function notifyApp(title, body, onClick) {
   stack.append(b);
   setTimeout(() => b.remove(), 9000);
 }
-function confirmToast(title, body) {
-  const stack = $('#notification-stack');
-  if (!stack) return Promise.resolve(confirm(`${title}\n\n${body}`));
-  return new Promise((resolve) => {
-    const card = document.createElement('div');
-    card.className = 'app-notification confirmation-toast';
-    card.setAttribute('role', 'alertdialog');
-    card.setAttribute('aria-modal', 'true');
-    card.innerHTML = `<strong>${esc(title)}</strong><p>${esc(body)}</p><div class="confirmation-actions"><button type="button">No</button><button type="button" class="danger-action">Sí</button></div>`;
-    const [cancel, accept] = card.querySelectorAll('button');
-    const finish = (confirmed) => {
-      card.remove();
-      resolve(confirmed);
-    };
-    cancel.onclick = () => finish(false);
-    accept.onclick = () => finish(true);
-    card.onkeydown = (event) => {
-      if (event.key === 'Escape') finish(false);
-    };
-    stack.append(card);
-    cancel.focus();
-  });
+async function confirmToast(title, body) {
+  return !!(await openForm({
+    title,
+    description: body,
+    submitText: 'Sí, continuar',
+    danger: true,
+  }));
 }
 function focusRequests() {
-  activateDmPanelTab('activity', true);
-  $('#requests-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#requests-toggle').scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  setRequestsOpen(true);
 }
 async function downloadEncounterLog() {
   if (!confirm('¿Quieres descargar el log del encuentro anterior?')) return;
@@ -630,31 +698,50 @@ async function downloadEncounterLog() {
 }
 async function loadChatThreads() {
   if (!state.scenarioId || state.user.role === 'GUEST') return;
-  const data = await api(`/scenarios/${state.scenarioId}/chats`);
+  const scenarioId = state.scenarioId;
+  const data = await api(`/scenarios/${scenarioId}/chats`);
+  if (scenarioId !== state.scenarioId) return;
   state.chatThreads = data.threads || [];
   renderChatThreads();
 }
 function renderChatThreads() {
   const target = state.user.role === 'DM' ? $('#dm-chat-list') : $('#player-chat-list');
   if (!target) return;
-  target.innerHTML = '';
-  for (const t of state.chatThreads) {
-    const b = document.createElement('button');
-    b.className = 'chat-thread';
-    b.innerHTML = `${state.user.role === 'DM' ? esc(t.player_name) : 'Chat con DM'} ${+t.unread ? `<span class="badge">${+t.unread}</span>` : ''}<br><small>${esc(t.last_message || 'Sin mensajes')}</small>`;
-    b.onclick = () => openChat(+t.id, t.player_name || 'DM');
-    target.append(b);
-  }
-  if (!state.chatThreads.length) target.innerHTML = '<p class="muted">Sin chats.</p>';
+  updateList(
+    target,
+    state.chatThreads.length
+      ? state.chatThreads
+          .map(
+            (t) =>
+              `<button type="button" id="chat-thread-${+t.id}" data-chat-id="${+t.id}" class="chat-thread ${state.openChats.has(+t.id) && !state.openChats.get(+t.id).hidden ? 'active' : ''}"><strong>${state.user.role === 'DM' ? esc(t.player_name) : 'Chat con DM'}</strong> ${+t.unread ? `<span class="badge">${+t.unread}</span>` : ''}<small>${esc(t.last_message || 'Sin mensajes')}</small></button>`,
+          )
+          .join('')
+      : '<p class="muted">Sin conversaciones.</p>',
+  );
+  target.querySelectorAll('[data-chat-id]').forEach(
+    (button) =>
+      (button.onclick = () => {
+        const thread = state.chatThreads.find((t) => +t.id === +button.dataset.chatId);
+        openChat(+thread.id, state.user.role === 'DM' ? thread.player_name : 'Chat con DM').catch(
+          (error) => toast(error.message),
+        );
+      }),
+  );
   updateActivityBadge();
 }
-async function openChat(chatId, title = 'Chat') {
+async function openChat(chatId, title = 'Chat', focus = true) {
+  const scenarioId = state.scenarioId;
   const data = await api(`/chats/${chatId}/messages`);
+  if (scenarioId !== state.scenarioId) return;
+  if (focus) navigate('chat');
+  $('#chat-empty')?.remove();
+  for (const [id, element] of state.openChats) element.hidden = +id !== +chatId;
   let win = state.openChats.get(chatId);
+  if (win) win.hidden = false;
   if (!win) {
     win = document.createElement('div');
     win.className = 'chat-window';
-    win.innerHTML = `<header><strong></strong><button type="button" class="icon-button">×</button></header><div class="chat-messages"></div><form class="chat-send"><input name="message" autocomplete="off" maxlength="2000" placeholder="Mensaje…"><button>Enviar</button></form>`;
+    win.innerHTML = `<header><strong></strong><button type="button" class="icon-button" aria-label="Cerrar conversación">${icon('close')}</button></header><div class="chat-messages" role="log" aria-live="polite"></div><form class="chat-send"><label class="sr-only" for="chat-input-${chatId}">Mensaje</label><input id="chat-input-${chatId}" name="message" autocomplete="off" maxlength="2000" placeholder="Mensaje…"><button>Enviar</button></form>`;
     win.querySelector('.icon-button').onclick = () => {
       state.openChats.delete(chatId);
       win.remove();
@@ -664,6 +751,10 @@ async function openChat(chatId, title = 'Chat') {
       const input = e.target.elements.message,
         msg = input.value.trim();
       if (!msg) return;
+      if (state.ws?.readyState !== 1) {
+        toast('Sin conexión. Tu mensaje no se ha enviado.');
+        return;
+      }
       input.value = '';
       state.ws.send(
         JSON.stringify({
@@ -682,13 +773,15 @@ async function openChat(chatId, title = 'Chat') {
 }
 function renderChatWindow(win, messages) {
   const box = win.querySelector('.chat-messages');
+  const atEnd = box.scrollHeight - box.clientHeight - box.scrollTop < 48;
+  const scroll = box.scrollTop;
   box.innerHTML = messages
     .map(
       (m) =>
         `<div class="chat-msg ${+m.sender_id === +state.user.id ? 'mine' : ''}"><small>${esc(m.sender_name)} · ${esc(m.created_at)}</small>${esc(m.message)}</div>`,
     )
     .join('');
-  box.scrollTop = box.scrollHeight;
+  box.scrollTop = atEnd ? box.scrollHeight : scroll;
 }
 function startD20Animation(rollId) {
   diceRenderer ||= createD20Renderer($('#dice-roll-canvas'), $('#dice-effects-canvas'));
@@ -731,6 +824,9 @@ function handleDiceRollRevealed(roll) {
         : result === 1
           ? '¡1 natural · Pifia!'
           : `Resultado: ${result}`;
+    state.lastPublicRoll = roll;
+    $('#public-roll').innerHTML =
+      `<div class="public-roll">${icon('dice')}<strong>${result}</strong><span>${esc(roll.roller_name)}<small>Última tirada · d20</small></span></div>`;
     // Start the reading time at physical rest, never while the die is still bouncing.
     diceHideTimer = setTimeout(resetDiceAnimation, result === 1 || result === 20 ? 3200 : 2000);
   });
@@ -809,7 +905,10 @@ function renderDiceRollLog() {
 function handleChatMessage(msg) {
   loadChatThreads().catch(() => {});
   const open = state.openChats.get(+msg.chat_id);
-  if (open) openChat(+msg.chat_id, msg.player_name || 'Chat');
+  if (open && !open.hidden && state.page === 'chat')
+    openChat(+msg.chat_id, state.user.role === 'DM' ? msg.player_name : 'Chat con DM', false).catch(
+      (error) => toast(error.message),
+    );
   else
     notifyApp(
       state.user.role === 'DM' ? `Chat de ${msg.player_name}` : 'Mensaje del DM',
@@ -817,64 +916,124 @@ function handleChatMessage(msg) {
       () => openChat(+msg.chat_id, msg.player_name || 'DM'),
     );
 }
-function handleEncounterStart() {
-  if (!state.encounterSelecting) {
-    state.encounterSelecting = true;
-    state.selectedPlayers = new Set(state.data.players.filter((p) => +p.placed).map((p) => +p.id));
-    state.selectedNpcs = new Set(
-      state.data.npcs.filter((n) => +n.visible && +n.health > 0).map((n) => +n.id),
-    );
-    state.selectedObjects.clear();
-    $('#encounter-start').textContent = 'Confirmar';
-    setMode('select');
-    toast('Deselecciona las fichas que no participarán y pulsa Confirmar');
-    draw();
-    return;
-  }
-  const participants = [...state.selectedPlayers]
-    .map((id) => ({ kind: 'PLAYER', id }))
-    .concat([...state.selectedNpcs].map((id) => ({ kind: 'NPC', id })));
-  state.encounterSelecting = false;
-  $('#encounter-start').textContent = 'Iniciar combate';
-  command('encounter.start', { participants });
+function encounterCandidates() {
+  if (!state.data) return [];
+  return [
+    ...state.data.players.filter((p) => +p.placed).map((p) => ({ ...p, kind: 'PLAYER' })),
+    ...state.data.npcs
+      .filter((n) => +n.visible && +n.health > 0)
+      .map((n) => ({ ...n, kind: 'NPC' })),
+  ];
 }
-function renderPlayerHp() {
-  const list = $('#player-hp-list');
-  if (!list || !canUsePlayerCharacters()) return;
-  const mine = (state.data?.players || []).filter(
-    (p) => +p.user_id === +state.user.id && +p.placed && p.health !== undefined,
+function beginEncounterDraft() {
+  if (!state.data || state.pendingTurn) return;
+  state.encounterSelecting = true;
+  state.encounterDraft = new Set(encounterCandidates().map((t) => `${t.kind}:${t.id}`));
+  $('#encounter-actions-menu').open = false;
+  $('#encounter-error').hidden = true;
+  setEncounterOpen(true);
+  setEncounterTab('order');
+  setMode('select');
+  renderEncounterControls();
+  draw();
+}
+function cancelEncounterDraft() {
+  if (!state.encounterSelecting) return;
+  state.encounterSelecting = false;
+  state.encounterDraft = null;
+  $('#encounter-error').hidden = true;
+  // A submitted command remains authoritative even if its panel is closed.
+  renderEncounterControls();
+  draw();
+}
+async function handleEncounterStart() {
+  if (!state.encounterSelecting || state.pendingTurn) return;
+  const scenarioId = state.scenarioId;
+  if (
+    state.data.encounter?.state === 'RUNNING' &&
+    !(await confirmToast(
+      '¿Sustituir el encuentro?',
+      'Se iniciará un nuevo encuentro con esta selección. Se limpiarán las esperas, el historial de turnos y el log de salud anterior.',
+    ))
+  )
+    return;
+  if (scenarioId !== state.scenarioId || !state.encounterDraft) return;
+  const participants = encounterCandidates()
+    .filter((t) => state.encounterDraft.has(`${t.kind}:${t.id}`))
+    .map((t) => ({ kind: t.kind, id: +t.id }));
+  state.draftRequestId = command('encounter.start', { prepare: true, participants });
+  updateTurnControls();
+}
+function renderEncounterDraft() {
+  const candidates = encounterCandidates();
+  if (state.encounterDraft) {
+    const valid = new Set(candidates.map((t) => `${t.kind}:${t.id}`));
+    state.encounterDraft = new Set([...state.encounterDraft].filter((key) => valid.has(key)));
+  }
+  updateList(
+    $('#encounter-candidates'),
+    candidates.length
+      ? candidates
+          .map((t) => {
+            const key = `${t.kind}:${t.id}`;
+            return `<div class="b-participant-option"><label><input id="draft-${t.kind}-${+t.id}" type="checkbox" data-draft-key="${key}" ${state.encounterDraft?.has(key) ? 'checked' : ''} ${state.pendingTurn ? 'disabled' : ''}>${avatar(t)}<span>${esc(t.name || t.user_name)}<small>${t.kind === 'PLAYER' ? 'Jugador' : 'NPC'} · IR ${esc(t.initiative ?? '—')} · ${displayHp(t.health, t)} / ${+t.max_health} PV</small></span></label><button type="button" id="draft-inspect-${t.kind}-${+t.id}" class="icon-button" data-draft-inspect="${key}" aria-label="Inspeccionar ${esc(t.name || t.user_name)}">${icon('search')}</button></div>`;
+          })
+          .join('')
+      : '<div class="empty-state">Coloca personajes o añade NPCs visibles al mapa.</div>',
   );
-  list.innerHTML = mine.length
-    ? mine
-        .map(
-          (p) =>
-            `<div class="hp-card ${+p.health <= 0 ? 'down' : ''}"><div><strong>${esc(p.name || p.user_name || 'Personaje')}${+p.health <= 0 ? ' · Caído' : ''}</strong><br><span>${esc(displayHp(p.health, { kind: 'PLAYER' }))} / ${esc(p.max_health ?? p.health)} PV</span></div><div class="row"><button data-rot-left="${+p.id}" title="Rotar -45°">↶</button><button data-rot-right="${+p.id}" title="Rotar +45°">↷</button></div></div>`,
-        )
-        .join('')
-    : '<p class="muted">No tienes fichas colocadas en este mapa.</p>';
-  list.querySelectorAll('[data-rot-left]').forEach(
-    (b) =>
-      (b.onclick = () => {
-        const p = mine.find((x) => +x.id === +b.dataset.rotLeft);
-        if (p) command('player.rotate', { id: +p.id, delta: -45 });
+  $$('[data-draft-key]').forEach(
+    (input) =>
+      (input.onchange = () => {
+        if (!state.encounterDraft) return;
+        input.checked
+          ? state.encounterDraft.add(input.dataset.draftKey)
+          : state.encounterDraft.delete(input.dataset.draftKey);
+        draw();
       }),
   );
-  list.querySelectorAll('[data-rot-right]').forEach(
-    (b) =>
-      (b.onclick = () => {
-        const p = mine.find((x) => +x.id === +b.dataset.rotRight);
-        if (p) command('player.rotate', { id: +p.id, delta: 45 });
+  $$('[data-draft-inspect]').forEach(
+    (button) =>
+      (button.onclick = () => {
+        const token = candidates.find((t) => `${t.kind}:${t.id}` === button.dataset.draftInspect);
+        if (token) inspect(token);
       }),
   );
+}
+function renderEncounterControls() {
+  const encounter = state.data?.encounter;
+  const active = encounter && encounter.state !== 'OFF';
+  const draft = state.encounterSelecting;
+  $('#turn-info').textContent = draft
+    ? 'Preparación del encuentro'
+    : active
+      ? `Ronda ${+encounter.round_no || 0} · ${encounter.state === 'RUNNING' ? 'En curso' : 'Preparado'}`
+      : 'Exploración libre. Prepara un encuentro cuando la mesa esté lista.';
+  $('#encounter-prepare').hidden = !!active || draft;
+  $('#encounter-prepare').disabled = !state.data;
+  $('#encounter-start').hidden = !draft;
+  $('#encounter-cancel').hidden = !draft;
+  $('#encounter-draft').hidden = !draft;
+  $('#encounter-actions-menu').hidden = !active || draft;
+  $('#encounter-prepare-another').textContent =
+    encounter?.state === 'RUNNING' ? 'Preparar otro encuentro' : 'Elegir participantes';
+  $('#restart-round').hidden = encounter?.state !== 'RUNNING';
+  $('#turn-next').hidden = encounter?.state !== 'RUNNING' || draft;
+  $('#turn-rollback').hidden = encounter?.state !== 'RUNNING' || draft;
+  if (draft) renderEncounterDraft();
+  renderEncounterBar();
+  renderRoundOrder();
+  updateTurnControls();
+  refreshInterface();
 }
 function updateActivityBadge() {
   const badge = $('#activity-badge');
-  if (!badge || state.user?.role !== 'DM') return;
+  if (!badge || state.user?.role === 'GUEST') return;
   const pending = state.data?.pendingMovements?.length || 0;
   const unread = state.chatThreads.reduce((total, thread) => total + (+thread.unread || 0), 0);
-  const total = pending + unread;
-  badge.textContent = String(total);
-  badge.hidden = total === 0;
+  badge.textContent = String(pending);
+  badge.hidden = pending === 0;
+  $('#chat-badge').textContent = String(unread);
+  $('#chat-badge').hidden = unread === 0;
 }
 
 function currentEncounterActor() {
@@ -893,25 +1052,40 @@ function currentEncounterActor() {
 function focusCurrentParticipant() {
   const { token } = currentEncounterActor();
   if (!token) return toast('No hay un participante actual para centrar');
+  centerToken(token);
+}
+function centerToken(token) {
   const bounds = canvas.getBoundingClientRect();
-  state.camera.x = bounds.width / 2 - (+token.x + 0.5) * cellSize * state.camera.z;
+  let width = bounds.width;
+  if (state.encounterOpen && matchMedia('(max-width:900px)').matches) {
+    width = Math.max(50, $('#encounter-panel').getBoundingClientRect().left - bounds.left);
+  }
+  state.camera.x = width / 2 - (+token.x + 0.5) * cellSize * state.camera.z;
   state.camera.y = bounds.height / 2 - (+token.y + 0.5) * cellSize * state.camera.z;
   draw();
   publishDmView();
 }
 
 function renderEncounterBar() {
-  const bar = $('#encounter-bar');
-  if (!bar || state.user?.role !== 'DM') return;
   const encounter = state.data?.encounter;
   const active = encounter && encounter.state !== 'OFF';
-  bar.hidden = !active;
-  if (!active) return;
+  const { participant, token } = currentEncounterActor();
+  $('#player-turn-summary').hidden = state.user?.role !== 'PLAYER' || !active;
+  const ownTurn =
+    encounter?.state === 'RUNNING' &&
+    participant?.actor_type === 'PLAYER' &&
+    participant.state === 'ACTIVE' &&
+    +token?.user_id === +state.user?.id;
+  $('#player-turn-name').textContent = ownTurn
+    ? `Tu momento, ${token.name || 'aventurero'}`
+    : 'El destino se mueve';
+  $('#encounter-current-focus').hidden = !active || state.encounterSelecting || !token;
+  if (state.user?.role !== 'DM' || !active) return;
   $('#encounter-bar-round').textContent =
     encounter.state === 'RUNNING'
       ? `Ronda ${encounter.round_no || 0} · Turno ${encounter.turn_sequence || 0}`
       : encounter.state;
-  const { participant, token } = currentEncounterActor();
+  $('#encounter-current-avatar').innerHTML = avatar(token);
   $('#encounter-bar-current').textContent = token
     ? token.name || token.user_name || participant.actor_type
     : encounter.state === 'PREPARING'
@@ -921,9 +1095,7 @@ function renderEncounterBar() {
     token?.health === undefined
       ? ''
       : `${displayHp(token.health, { kind: participant.actor_type })} / ${token.max_health ?? token.health} PV`;
-  const running = encounter.state === 'RUNNING';
-  $('#turn-next').hidden = !running;
-  $('#turn-rollback').hidden = !running;
+  $('#encounter-current-focus').disabled = !token;
 }
 
 function renderRoundOrder() {
@@ -931,7 +1103,11 @@ function renderRoundOrder() {
     list = $('#round-order-list');
   if (!panel || !list) return;
   const encounter = state.data?.encounter,
-    show = state.user.role === 'DM' && encounter && encounter.state !== 'OFF';
+    show =
+      state.user.role === 'DM' &&
+      encounter &&
+      encounter.state !== 'OFF' &&
+      !state.encounterSelecting;
   panel.hidden = !show;
   if (!show) {
     state.encounterTokenHighlight = null;
@@ -973,7 +1149,8 @@ function renderRoundOrder() {
         kind: p.actor_type,
         tokenId: +token.id,
         token: { ...token, kind: p.actor_type },
-        name: (token.name || token.user_name || 'Token') + status + hidden,
+        name: token.name || token.user_name || 'Ficha',
+        status: (p.actor_type === 'PLAYER' ? 'Jugador' : 'NPC') + status + hidden,
         initiative: p.initiative ?? token.initiative ?? '—',
         hp: token.health === undefined ? '—' : displayHp(token.health, { kind: p.actor_type }),
         max: max ?? '—',
@@ -987,16 +1164,26 @@ function renderRoundOrder() {
     !rows.some((row) => row.kind === highlighted.kind && row.tokenId === highlighted.id)
   )
     state.encounterTokenHighlight = null;
-  list.innerHTML = rows.length
-    ? rows
-        .map((r) => {
-          const previewed =
-            state.encounterTokenHighlight?.kind === r.kind &&
-            state.encounterTokenHighlight?.id === r.tokenId;
-          return `<li data-participant-id="${r.participantId}" class="${r.current ? 'current-round-token' : ''}${previewed ? ' encounter-preview-token' : ''}"><span>${esc(r.name)} <small>(IR: ${esc(r.initiative)})</small></span><strong>${esc(r.hp)} / ${esc(r.max)}</strong></li>`;
-        })
-        .join('')
-    : '<li class="muted">No hay fichas incluidas en el encounter.</li>';
+  updateList(
+    list,
+    rows.length
+      ? rows
+          .map((r) => {
+            const previewed =
+              state.encounterTokenHighlight?.kind === r.kind &&
+              state.encounterTokenHighlight?.id === r.tokenId;
+            return `<li class="b-turn-row"><button type="button" id="participant-${r.participantId}" data-participant-id="${r.participantId}" class="turn-card ${r.current ? 'current-round-token' : ''}${previewed ? ' encounter-preview-token' : ''}" aria-label="Resaltar ${esc(r.name)}${r.current ? ', turno actual' : ''}"><span class="turn-init">${esc(r.initiative)}</span>${avatar(r.token)}<span class="turn-name"><strong>${esc(r.name)}</strong><small>${r.current ? 'Turno actual · ' : ''}${esc(r.status)}</small></span><span class="turn-hp">${esc(r.hp)}<small>/ ${esc(r.max)}</small></span></button><button type="button" id="inspect-participant-${r.participantId}" data-inspect-participant="${r.participantId}" class="icon-button" aria-label="Inspeccionar ${esc(r.name)}">${icon('search')}</button></li>`;
+          })
+          .join('')
+      : '<li class="empty-state">No hay fichas incluidas en el encuentro.</li>',
+  );
+  list.querySelectorAll('[data-inspect-participant]').forEach(
+    (button) =>
+      (button.onclick = () => {
+        const row = rows.find((r) => r.participantId === +button.dataset.inspectParticipant);
+        if (row) selectMapEntity(row.token);
+      }),
+  );
   list.querySelectorAll('[data-participant-id]').forEach((item) => {
     const row = rows.find((candidate) => candidate.participantId === +item.dataset.participantId);
     item.onclick = () => {
@@ -1029,82 +1216,75 @@ function previewedMovementRequest() {
   const id = state.hoveredMovementPreview || state.selectedMovementPreview;
   return (state.data?.pendingMovements || []).find((request) => +request.id === +id) || null;
 }
-function setMovementPathPreview(id, persistent = false) {
-  if (persistent) {
-    state.selectedMovementPreview = +state.selectedMovementPreview === +id ? null : +id;
-    renderDetails();
-    return;
-  }
-  state.hoveredMovementPreview = id == null ? null : +id;
-  $$('#movement-requests .request').forEach((element) => {
-    const selected = +element.dataset.movementId === +state.selectedMovementPreview;
-    element.classList.toggle('previewing', selected);
-    element.setAttribute('aria-pressed', String(selected));
-  });
-  draw();
+function renderMovementRequests() {
+  const requests = state.data?.pendingMovements || [];
+  updateList(
+    $('#movement-requests'),
+    requests.length
+      ? requests
+          .map((m) => {
+            const player = state.data.players.find((p) => +p.id === +m.scenario_player_id);
+            return `<button type="button" id="request-${+m.id}" data-movement-id="${+m.id}" class="b-request-item ${+m.id === +state.selectedMovementPreview ? 'is-current' : ''}">${avatar(player)}<span><strong>${esc(m.character_name || m.user_name)}</strong></span>${icon('chevron')}</button>`;
+          })
+          .join('')
+      : '<div class="empty-state"><h3>Todo al día</h3><p>No hay solicitudes pendientes.</p></div>',
+  );
+  $$('[data-movement-id]').forEach(
+    (button) =>
+      (button.onclick = () => {
+        const id = +button.dataset.movementId;
+        if (!state.data?.pendingMovements.some((m) => +m.id === id)) return;
+        navigate('map');
+        state.selectedMovementPreview = id;
+        state.hoveredMovementPreview = null;
+        setRequestsOpen(false);
+        renderMovementRequests();
+        draw();
+        canvas.focus({ preventScroll: true });
+      }),
+  );
+  const current = requests.find((m) => +m.id === +state.selectedMovementPreview);
+  $('#movement-review-name').textContent = current
+    ? `${current.character_name || current.user_name} · ${current.reason || 'Movimiento pendiente'}`
+    : '';
+  for (const id of ['movement-approve', 'movement-reject'])
+    $(`#${id}`).disabled =
+      !current || !!state.pendingMovementRequestId || state.ws?.readyState !== 1;
+  refreshInterface();
 }
 function renderDetails() {
-  const d = state.data,
-    s = d.scenario;
+  if (!state.data) return;
+  const s = state.data.scenario;
+  $('#scene-name').textContent = s.name;
   $('#scenario-title').textContent = s.name;
-  $('#player-scenario-title').textContent = s.name;
-  const scenarioStatus = `${s.width}×${s.height} · ${+s.active ? 'Activo' : 'Inactivo'}`;
-  $('#scenario-status').textContent = scenarioStatus;
-  $('#player-scenario-status').textContent = scenarioStatus;
+  $('#scenario-status').textContent =
+    `${s.width} × ${s.height} · ${+s.active ? 'Activo' : 'En preparación'}`;
   $('#toggle-active').textContent = +s.active ? 'Desactivar' : 'Activar';
-  $('#turn-info').textContent = d.encounter
-    ? `${d.encounter.state} · Ronda ${d.encounter.round_no || 0}`
-    : 'Sin encounter';
-  if ($('#encounter-log'))
-    $('#encounter-log').hidden = !(state.user.role === 'DM' && d.previousEncounterLog);
-  if (!state.encounterSelecting) $('#encounter-start').textContent = 'Iniciar combate';
-  const encounterState = d.encounter?.state || 'OFF';
-  $('#encounter-actions-menu').hidden = encounterState === 'OFF';
-  $('#encounter-prepare').hidden = encounterState !== 'OFF';
-  $('#encounter-start').hidden = !['PREPARING', 'PAUSED'].includes(encounterState);
-  $('#restart-round').hidden = encounterState !== 'RUNNING';
-  $('#order-ties').hidden = encounterState === 'OFF';
-  $('#encounter-stop').hidden = encounterState === 'OFF';
-  renderPlayerHp();
-  renderEncounterBar();
-  renderRoundOrder();
+  renderEncounterControls();
   renderDiceRollLog();
-  const req = $('#movement-requests');
-  req.innerHTML = '';
-  d.pendingMovements.forEach((m) => {
-    const x = document.createElement('div'),
-      selected = +state.selectedMovementPreview === +m.id;
-    x.className = `request${selected ? ' previewing' : ''}`;
-    x.dataset.movementId = String(m.id);
-    x.setAttribute('role', 'button');
-    x.setAttribute('tabindex', '0');
-    x.setAttribute('aria-pressed', String(selected));
-    x.innerHTML = `<strong>${esc(m.user_name)}${m.character_name ? ` · ${esc(m.character_name)}` : ''}</strong><br><small>${esc(m.reason || 'Requiere revisión')} · Toca para ${selected ? 'ocultar' : 'ver'} la ruta en el mapa</small><br><button data-a>✓ Aprobar</button><button data-r>✕ Rechazar</button>`;
-    x.onclick = (e) => {
-      if (!e.target.closest('button')) setMovementPathPreview(m.id, true);
-    };
-    x.onkeydown = (e) => {
-      if (['Enter', ' '].includes(e.key)) {
-        e.preventDefault();
-        setMovementPathPreview(m.id, true);
-      }
-    };
-    x.onmouseenter = () => setMovementPathPreview(m.id);
-    x.onmouseleave = () => setMovementPathPreview(null);
-    x.querySelector('[data-a]').onclick = (e) => {
-      e.stopPropagation();
-      command('movement.approve', { movementId: +m.id });
-    };
-    x.querySelector('[data-r]').onclick = (e) => {
-      e.stopPropagation();
-      command('movement.reject', { movementId: +m.id });
-    };
-    req.append(x);
-  });
+  renderMovementRequests();
   updateActivityBadge();
-  if (selectionCount()) renderEntitySelection();
-  else draw();
-  updateTurnControls();
+  const token = inspectedToken();
+  if (token) inspect(token, true);
+  else if (selectionCount() && !state.encounterSelecting) renderEntitySelection(true);
+  refreshInterface();
+  draw();
+}
+$('#movement-review-close').onclick = () => {
+  state.selectedMovementPreview = null;
+  refreshInterface();
+  draw();
+};
+for (const [id, type] of [
+  ['movement-approve', 'movement.approve'],
+  ['movement-reject', 'movement.reject'],
+]) {
+  $(`#${id}`).onclick = () => {
+    const movementId = state.selectedMovementPreview;
+    if (!movementId || state.pendingMovementRequestId) return;
+    state.pendingMovementRequestId = command(type, { movementId });
+    renderMovementRequests();
+  };
 }
 $('#toggle-active').onclick = async () => {
   const active = +state.data.scenario.active;
@@ -1151,10 +1331,7 @@ function openImagePicker(target, allowGif = false) {
   $('#image-file').click();
 }
 $('#upload-background').onclick = () => openImagePicker('background', true);
-$('#upload-avatar').onclick = () => {
-  if (!state.selectedCharacter) return toast('Selecciona un personaje');
-  openImagePicker('avatar');
-};
+
 $('#image-file').onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -1214,17 +1391,13 @@ $('#image-file').onchange = async (e) => {
     e.target.value = '';
   }
 };
-if ($('#player-chat-open'))
-  $('#player-chat-open').onclick = async () => {
-    await loadChatThreads();
-    const t = state.chatThreads[0];
-    if (t) openChat(+t.id, 'DM');
-  };
 $('#encounter-current-focus').onclick = () => {
   focusCurrentParticipant();
   activateDmPanelTab('encounter', true);
 };
-$('#encounter-prepare').onclick = () => command('encounter.prepare');
+$('#encounter-prepare').onclick = beginEncounterDraft;
+$('#encounter-prepare-another').onclick = beginEncounterDraft;
+$('#encounter-cancel').onclick = cancelEncounterDraft;
 $('#encounter-start').onclick = () => handleEncounterStart();
 $('#encounter-log').onclick = () => downloadEncounterLog();
 $('#encounter-stop').onclick = async () => {
@@ -1232,14 +1405,20 @@ $('#encounter-stop').onclick = async () => {
     '¿Terminar el encounter?',
     'Se terminará el encounter actual. Este cambio es irreversible. ¿Deseas continuar?',
   );
-  if (confirmed) command('encounter.stop');
+  if (confirmed) {
+    $('#encounter-actions-menu').open = false;
+    command('encounter.stop');
+  }
 };
 $('#restart-round').onclick = async () => {
   const confirmed = await confirmToast(
     '¿Reiniciar la ronda?',
     'Se reiniciará la ronda actual y se limpiarán las esperas. Este cambio es irreversible. ¿Deseas continuar?',
   );
-  if (confirmed) command('encounter.restart_round');
+  if (confirmed) {
+    $('#encounter-actions-menu').open = false;
+    command('encounter.restart_round');
+  }
 };
 $('#turn-rollback').onclick = () => command('turn.rollback');
 $('#turn-next').onclick = () => command('turn.next');
@@ -1271,11 +1450,15 @@ const canvas = $('#map'),
   ctx = canvas.getContext('2d');
 let canvasViewSize = null;
 function resize() {
-  const r = canvas.getBoundingClientRect(),
-    dpr = devicePixelRatio || 1,
+  const r = canvas.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const dpr = devicePixelRatio || 1,
     previous = canvasViewSize,
     playerCenter =
-      state.user?.role === 'PLAYER' && state.data && previous?.width && previous?.height
+      ['DM', 'PLAYER'].includes(state.user?.role) &&
+      state.data &&
+      previous?.width &&
+      previous?.height
         ? {
             x: (previous.width / 2 - state.camera.x) / (cellSize * state.camera.z),
             y: (previous.height / 2 - state.camera.y) / (cellSize * state.camera.z),
@@ -1329,7 +1512,6 @@ function fitVisibleCellsForPlayers() {
   state.camera.y =
     (r.height - bounds.height * cellSize * state.camera.z) / 2 -
     bounds.y * cellSize * state.camera.z;
-  $('#zoom-label').textContent = Math.round(state.camera.z * 100) + '%';
 }
 new ResizeObserver(resize).observe($('#map-wrap'));
 const cellSize = 64;
@@ -1356,7 +1538,8 @@ function validCell(c) {
   return s && c.x >= 0 && c.y >= 0 && c.x < +s.width && c.y < +s.height;
 }
 function draw() {
-  if (!state.data || !canvas.width) return;
+  $('#path-actions').hidden = state.mode !== 'path' || !state.path.length;
+  if (!state.data || !canvas.width || state.page !== 'map') return;
   const r = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, r.width, r.height);
   const s = state.data.scenario,
@@ -1378,9 +1561,10 @@ function draw() {
   }
   if (s.background_asset_id) {
     const img = image(+s.background_asset_id);
-    if (img.complete) ctx.drawImage(img, origin.x, origin.y, +s.width * cs, +s.height * cs);
+    if (img.complete && img.naturalWidth)
+      ctx.drawImage(img, origin.x, origin.y, +s.width * cs, +s.height * cs);
   } else {
-    ctx.fillStyle = '#201b16';
+    ctx.fillStyle = '#291c24';
     ctx.fillRect(origin.x, origin.y, +s.width * cs, +s.height * cs);
   }
   ctx.fillStyle = '#51302c99';
@@ -1389,7 +1573,7 @@ function draw() {
     ctx.fillRect(p.x, p.y, cs, cs);
   });
   if (state.mode === 'path') drawAdjacentCells(cs);
-  ctx.strokeStyle = '#77665088';
+  ctx.strokeStyle = state.gridVisible ? 'rgba(237, 200, 165, 0.5)' : 'transparent';
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = 0; x <= +s.width; x++) {
@@ -1408,7 +1592,7 @@ function draw() {
   if (state.selectionDraft) drawSelectionDraft(cs);
   state.path.forEach((c, i) => {
     const p = worldToScreen(c.x, c.y);
-    ctx.fillStyle = '#58aee477';
+    ctx.fillStyle = '#efaa7844';
     ctx.fillRect(p.x + 2, p.y + 2, cs - 4, cs - 4);
     ctx.fillStyle = 'white';
     ctx.font = `${Math.max(10, 14 * z)}px sans-serif`;
@@ -1419,6 +1603,25 @@ function draw() {
   const groups = groupTokens();
   for (const [, tokens] of groups) drawGroup(tokens, cs);
   drawFreehand();
+  if (state.user?.role === 'DM') {
+    ctx.save();
+    ctx.strokeStyle = '#efaa78';
+    ctx.fillStyle = '#291c24';
+    ctx.lineWidth = 1;
+    for (const note of state.data.cellNotes || []) {
+      const point = worldToScreen(+note.x, +note.y);
+      const size = Math.max(10, 14 * z);
+      ctx.fillRect(point.x + 4, point.y + 4, size, size);
+      ctx.strokeRect(point.x + 4, point.y + 4, size, size);
+      ctx.beginPath();
+      ctx.moveTo(point.x + 7, point.y + 8);
+      ctx.lineTo(point.x + size, point.y + 8);
+      ctx.moveTo(point.x + 7, point.y + 12);
+      ctx.lineTo(point.x + size, point.y + 12);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   drawVisibilityEffects(cs);
   drawEncounterTokenHighlight(cs);
   if (restrictVisibility) ctx.restore();
@@ -1452,7 +1655,7 @@ function drawEncounterTokenHighlight(cs) {
   ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
   ctx.setLineDash([Math.max(5, cs * 0.1), Math.max(4, cs * 0.07)]);
   ctx.lineWidth = Math.max(2, cs * 0.045);
-  ctx.strokeStyle = '#fff1a8';
+  ctx.strokeStyle = '#efaa78';
   ctx.shadowColor = '#000';
   ctx.shadowBlur = Math.max(3, cs * 0.06);
   ctx.stroke();
@@ -1587,8 +1790,8 @@ function objectDraftArea() {
 }
 function drawFoggedCells(cs, fogged) {
   ctx.save();
-  ctx.fillStyle = '#080b0d80';
-  ctx.strokeStyle = '#d7aa5266';
+  ctx.fillStyle = '#22172080';
+  ctx.strokeStyle = '#efaa7840';
   ctx.lineWidth = Math.max(1, cs * 0.025);
   for (const key of fogged) {
     const [x, y] = key.split(',').map(Number),
@@ -1634,27 +1837,27 @@ function cellsInArea(area) {
     for (let x = area.x; x < area.x + area.widthCells; x++) cells.push({ x, y });
   return cells;
 }
-function applyFogCells(cells, fogged) {
-  const changed = new Set(cells.map((cell) => `${cell.x},${cell.y}`));
-  if (fogged) {
-    const existing = new Set((state.data.foggedCells || []).map((cell) => `${+cell.x},${+cell.y}`));
+function applyPaintCells(cells, add, mode) {
+  const collection = mode === 'fog' ? 'foggedCells' : 'blocked',
+    changed = new Set(cells.map((cell) => `${cell.x},${cell.y}`));
+  if (add) {
+    const existing = new Set(state.data[collection].map((cell) => `${+cell.x},${+cell.y}`));
     for (const cell of cells)
-      if (!existing.has(`${cell.x},${cell.y}`)) state.data.foggedCells.push(cell);
+      if (!existing.has(`${cell.x},${cell.y}`)) state.data[collection].push(cell);
   } else {
-    state.data.foggedCells = state.data.foggedCells.filter(
+    state.data[collection] = state.data[collection].filter(
       (cell) => !changed.has(`${+cell.x},${+cell.y}`),
     );
   }
-  draw();
 }
 function drawSelectionDraft(cs) {
   const area = selectionDraftArea();
   if (!area) return;
   const p = worldToScreen(area.x, area.y),
-    hidingFog = state.mode === 'fog' && state.drag?.fogRectangle && state.drag.fogged;
+    restricting = state.drag?.paintRectangle && state.drag.paintAdd;
   ctx.save();
-  ctx.fillStyle = hidingFog ? '#d7aa5238' : '#66aaff28';
-  ctx.strokeStyle = hidingFog ? '#ffd782' : '#8bc5ff';
+  ctx.fillStyle = restricting ? '#e1856938' : '#efaa7828';
+  ctx.strokeStyle = restricting ? '#e18569' : '#efaa78';
   ctx.lineWidth = 2;
   ctx.setLineDash([6, 4]);
   ctx.fillRect(p.x, p.y, area.widthCells * cs, area.heightCells * cs);
@@ -1696,12 +1899,23 @@ function groupTokens() {
     };
   state.data.npcs.forEach((x) => push({ ...x, kind: 'NPC' }));
   state.data.players
-    .filter((x) => +x.placed || state.user.role === 'DM')
+    .filter((x) => +x.placed)
     .forEach((x) => {
       const pos = animatedPos(x);
       push({ ...x, kind: 'PLAYER', renderX: pos.x, renderY: pos.y });
     });
   return m;
+}
+function tokenBaseSize() {
+  return innerWidth >= 1700
+    ? 53
+    : innerWidth <= 480
+      ? 34
+      : innerWidth <= 760
+        ? 38
+        : innerWidth <= 1000
+          ? 42
+          : 46;
 }
 function drawGroup(ts, cs) {
   const base = worldToScreen(+(ts[0].renderX ?? ts[0].x), +(ts[0].renderY ?? ts[0].y)),
@@ -1711,13 +1925,13 @@ function drawGroup(ts, cs) {
     const cols = ts.length > 1 ? 2 : 1,
       row = Math.floor(i / cols),
       col = i % cols,
-      size =
-        (t.kind === 'OBJECT' ? 0.25 : t.kind === 'NPC' ? 0.98 : 0.48) *
-        cs *
-        (ts.length > 1 ? 0.72 : 1),
+      size = tokenBaseSize() * state.camera.z * (ts.length > 1 ? 0.72 : 1),
       cx = base.x + cs * (ts.length === 1 ? 0.5 : 0.28 + 0.44 * col),
       cy = base.y + cs * (ts.length === 1 ? 0.5 : 0.28 + 0.44 * row);
+    ctx.save();
+    if (t.kind === 'NPC' && t.visible !== undefined && !+t.visible) ctx.globalAlpha = 0.65;
     const current = isCurrent(t),
+      inDraft = state.encounterSelecting && state.encounterDraft?.has(`${t.kind}:${t.id}`),
       selected =
         (t.kind === 'NPC' && state.selectedNpcs.has(+t.id)) ||
         (t.kind === 'PLAYER' && state.selectedPlayers.has(+t.id)) ||
@@ -1727,9 +1941,10 @@ function drawGroup(ts, cs) {
           +t.character_id === +state.selectedCharacter);
     if (current) {
       ctx.beginPath();
-      ctx.arc(cx, cy, size * 0.8, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffd24c88';
-      ctx.fill();
+      ctx.arc(cx, cy, size / 2 + 9 * state.camera.z, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e5a274';
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
     const img = t.image_asset_id ? image(+t.image_asset_id) : null;
     if (t.kind === 'OBJECT') {
@@ -1750,7 +1965,7 @@ function drawGroup(ts, cs) {
       ctx.beginPath();
       ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
       if (t.kind !== 'NPC' || !t.image_asset_id) {
-        const fill = t.kind === 'PLAYER' ? t.token_color || '#4c8cc7' : '#a04f4f';
+        const fill = t.kind === 'PLAYER' ? t.token_color || '#37242c' : '#49313a';
         if (fill !== 'transparent') {
           ctx.fillStyle = fill;
           ctx.fill();
@@ -1786,15 +2001,22 @@ function drawGroup(ts, cs) {
         ctx.stroke();
         ctx.restore();
       }
-      if (selected) {
-        ctx.strokeStyle = '#fff19b';
+      ctx.beginPath();
+      ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+      ctx.strokeStyle = t.kind === 'NPC' ? '#b46d78' : '#c6a17b';
+      ctx.lineWidth = Math.max(1, 2 * state.camera.z);
+      if (t.kind === 'NPC' && t.visible !== undefined && !+t.visible) ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (selected || inDraft) {
+        ctx.strokeStyle = inDraft ? '#e8b988' : '#efaa78';
         ctx.lineWidth = Math.max(3, cs * 0.06);
         ctx.beginPath();
         ctx.arc(cx, cy, size * 0.62, 0, Math.PI * 2);
         ctx.stroke();
       }
       if (+t.health <= 0 && state.user.role === 'DM') {
-        ctx.strokeStyle = '#ff2222';
+        ctx.strokeStyle = '#d88699';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(cx - size / 3, cy - size / 3);
@@ -1804,6 +2026,7 @@ function drawGroup(ts, cs) {
         ctx.stroke();
       }
     }
+    ctx.restore();
   });
   if (many) {
     ctx.fillStyle = '#111';
@@ -1841,7 +2064,7 @@ function drawVisibilityEffects(cs) {
 }
 function drawNpcGhost(t, cs, alpha) {
   const p = worldToScreen(+t.x + 0.5, +t.y + 0.5),
-    size = 0.98 * cs,
+    size = tokenBaseSize() * state.camera.z,
     img = t.image_asset_id ? image(+t.image_asset_id) : null;
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -1898,7 +2121,9 @@ function blockedKey(c) {
   return `${+c.x},${+c.y}`;
 }
 function blockedSet() {
-  return new Set((state.data?.blocked || []).map(blockedKey));
+  const blocked = new Set((state.data?.blocked || []).map(blockedKey));
+  if (state.user?.role === 'PLAYER') for (const key of foggedCellSet()) blocked.add(key);
+  return blocked;
 }
 function movementRoute(from, to) {
   if (!validCell(to)) return null;
@@ -1958,7 +2183,7 @@ function movementRoute(from, to) {
 function drawAdjacentCells(cs) {
   const own = controlledPlayer();
   if (!own) return;
-  ctx.fillStyle = '#56c87822';
+  ctx.fillStyle = '#efaa7812';
   const blocked = blockedSet();
   for (let y = 0; y < +state.data.scenario.height; y++)
     for (let x = 0; x < +state.data.scenario.width; x++) {
@@ -2060,6 +2285,13 @@ function image(id) {
 // Canvas tools and pointer interaction.
 $$('[data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
 function setMode(m, keepPendingAction = false) {
+  if (state.drag?.paintMode) {
+    clearTimeout(state.drag.longPressTimer);
+    cancelCellPaint();
+    state.drag = null;
+    state.pointers.clear();
+    state.pinch = null;
+  }
   if (!keepPendingAction) {
     state.cloneSource = null;
     state.moveToken = null;
@@ -2067,14 +2299,26 @@ function setMode(m, keepPendingAction = false) {
   state.mode = m;
   state.objectDraft = null;
   state.selectionDraft = null;
-  $$('[data-mode]').forEach((x) => x.classList.toggle('active', x.dataset.mode === m));
+  $$('[data-mode]').forEach((x) => {
+    x.classList.toggle('active', x.dataset.mode === m);
+    x.setAttribute('aria-pressed', String(x.dataset.mode === m));
+  });
+  const help = {
+    select: 'Selecciona fichas · Alt + arrastre: selección múltiple',
+    fog: 'Revelar: izquierdo · ocultar: derecho · Ctrl: rectángulo · táctil: mantén pulsado para ocultar',
+    terrain:
+      'Transitable: izquierdo · bloquear: derecho · Ctrl: rectángulo · táctil: mantén pulsado para bloquear',
+    note: 'Toca una casilla para editar su nota privada',
+    npc: 'Toca una casilla para añadir un NPC',
+    object: 'Arrastra para definir el área del objeto',
+    path: 'Elige el recorrido de tu personaje',
+    place: 'Toca una casilla para colocar el personaje',
+    paste: 'Toca la casilla de anclaje del grupo',
+  };
+  $('#map-hint').textContent = help[m] || '';
+  $('#map-hint').hidden = !help[m];
+  refreshInterface();
   if (m !== 'path') state.path = [];
-  if (m === 'object') toast('Arrastra sobre el mapa para definir el área del objeto');
-  if (m === 'fog') toast('Izquierdo: revelar · derecho: ocultar · Ctrl + arrastre: rectángulo');
-  if (m === 'select')
-    toast(
-      'Arrastra o toca para alternar selección; lo seleccionado se mantiene mientras sigas en Seleccionar',
-    );
   updatePasteControl();
   draw();
 }
@@ -2086,7 +2330,9 @@ function updatePasteControl() {
   button.hidden = !available;
   button.disabled =
     !state.data || !!state.pendingPasteRequestId || state.ws?.readyState !== WebSocket.OPEN;
-  button.textContent = available ? `Pegar (${count})` : 'Pegar';
+  button.innerHTML = icon('copy');
+  button.title = available ? `Pegar ${count} NPCs` : 'Pegar grupo';
+  button.setAttribute('aria-label', button.title);
   button.classList.toggle('active', available && state.mode === 'paste');
 }
 $('#paste-tokens').onclick = () => {
@@ -2112,7 +2358,10 @@ function setDrawingMode(on) {
   );
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', !on && x.dataset.mode === 'pan'));
   $('#draw-mode').classList.toggle('active', on);
-  $('#dm-draw-mode').classList.toggle('active', on);
+  $('#draw-mode').setAttribute('aria-pressed', String(on));
+  $('#map-hint').hidden = !on;
+  $('#map-hint').textContent = 'Dibuja sobre el mapa. Al salir se borran tus trazos.';
+  refreshInterface();
   updatePasteControl();
   updateDrawButtons();
   if (!on) sendDraw({ op: 'clearUser' });
@@ -2121,10 +2370,20 @@ function setDrawingMode(on) {
 function updateDrawButtons() {
   $('#draw-pen').classList.toggle('active', state.drawTool === 'pen');
   $('#draw-eraser').classList.toggle('active', state.drawTool === 'eraser');
-  $('#draw-size-label').textContent = `Tamaño: ${state.drawSize}`;
+  $('#draw-size-label').textContent = String(state.drawSize);
+  $('#draw-size-label').setAttribute('aria-label', `Tamaño del lápiz: ${state.drawSize}`);
 }
 $('#draw-mode').onclick = () => setDrawingMode(true);
-$('#dm-draw-mode').onclick = () => setDrawingMode(true);
+$('#toggle-grid').onclick = () => {
+  state.gridVisible = !state.gridVisible;
+  $('#toggle-grid').setAttribute('aria-pressed', String(state.gridVisible));
+  draw();
+};
+$('#cancel-path').onclick = () => {
+  state.path = [];
+  refreshInterface();
+  draw();
+};
 $$('.tool-group').forEach((group) => {
   group.ontoggle = () => {
     if (!group.open) return;
@@ -2172,16 +2431,50 @@ $('#clear-map-fog').onclick = async () => {
   });
   if (confirmed) command('map.fog.clear');
 };
-$('#zoom-in').onclick = () => zoomAt(1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
-$('#zoom-out').onclick = () => zoomAt(1 / 1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
+canvas.addEventListener('keydown', (event) => {
+  if (
+    state.user?.role === 'GUEST' ||
+    !state.data ||
+    event.target !== canvas ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey
+  )
+    return;
+  if (['+', '=', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key))
+    event.preventDefault();
+  if (['+', '='].includes(event.key)) zoomAt(1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
+  else if (event.key === '-') zoomAt(1 / 1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
+  else if (event.key === '0') {
+    const bounds = canvas.getBoundingClientRect(),
+      s = state.data.scenario;
+    state.camera.z = Math.min(
+      3,
+      Math.max(
+        0.5,
+        Math.min(bounds.width / (+s.width * cellSize), bounds.height / (+s.height * cellSize)) *
+          0.9,
+      ),
+    );
+    state.camera.x = (bounds.width - +s.width * cellSize * state.camera.z) / 2;
+    state.camera.y = (bounds.height - +s.height * cellSize * state.camera.z) / 2;
+    draw();
+    publishDmView();
+  } else if (event.key.startsWith('Arrow')) {
+    state.camera.x += event.key === 'ArrowLeft' ? 40 : event.key === 'ArrowRight' ? -40 : 0;
+    state.camera.y += event.key === 'ArrowUp' ? 40 : event.key === 'ArrowDown' ? -40 : 0;
+    draw();
+    publishDmView();
+  }
+});
 function zoomAt(f, x, y) {
   if (state.user?.role === 'GUEST') return;
   const old = state.camera.z,
-    n = Math.min(3, Math.max(0.25, old * f));
+    n = Math.min(3, Math.max(0.5, old * f));
   state.camera.x = x - ((x - state.camera.x) * n) / old;
   state.camera.y = y - ((y - state.camera.y) * n) / old;
   state.camera.z = n;
-  $('#zoom-label').textContent = Math.round(n * 100) + '%';
+
   draw();
   publishDmView();
 }
@@ -2195,7 +2488,7 @@ function focusZoomAt(x, y) {
   state.camera.z = target;
   state.camera.x = r.width / 2 - wx * cellSize * target;
   state.camera.y = r.height / 2 - wy * cellSize * target;
-  $('#zoom-label').textContent = Math.round(target * 100) + '%';
+
   draw();
   publishDmView();
 }
@@ -2219,24 +2512,33 @@ canvas.addEventListener(
   },
   { passive: false },
 );
-function foggedForPointer(e) {
-  return e.pointerType !== 'touch' && e.button === 2;
+function isCellPaintMode(mode) {
+  return mode === 'fog' || mode === 'terrain';
+}
+function cancelCellPaint() {
+  const hadPreview = state.paint.size > 0;
+  state.paint.clear();
+  if (hadPreview && state.scenarioId && state.ws?.readyState === 1) subscribe();
 }
 canvas.onpointerdown = (e) => {
+  if (!state.data || state.user?.role === 'GUEST') return;
+  canvas.focus({ preventScroll: true });
   const forcePan = e.button === 1,
     forceSelect =
       state.user.role === 'DM' && e.pointerType === 'mouse' && e.button === 0 && e.altKey,
     mode = forceSelect ? 'select' : state.mode,
-    fogRectangle =
-      mode === 'fog' &&
-      e.pointerType !== 'touch' &&
-      e.ctrlKey &&
-      (e.button === 0 || e.button === 2);
-  if (forcePan || forceSelect || mode === 'fog') e.preventDefault();
+    cellPaint = isCellPaintMode(mode) && !forcePan,
+    paintRectangle = cellPaint && e.pointerType !== 'touch' && e.ctrlKey;
+  if (cellPaint) {
+    if (state.user.role !== 'DM' || ![0, 2].includes(e.button)) return;
+    if (state.ws?.readyState !== 1) return toast('Sin conexión');
+  }
+  if (forcePan || forceSelect || cellPaint) e.preventDefault();
   if (forceSelect) state.lastTap = null;
   canvas.setPointerCapture(e.pointerId);
   state.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
   if (state.pointers.size === 1) {
+    state.paint.clear();
     state.drag = {
       x: e.offsetX,
       y: e.offsetY,
@@ -2246,20 +2548,29 @@ canvas.onpointerdown = (e) => {
       forcePan,
       forceSelect,
       pointerId: e.pointerId,
-      fogged: mode === 'fog' ? foggedForPointer(e) : null,
-      fogRectangle,
+      scenarioId: state.scenarioId,
+      paintMode: cellPaint ? mode : null,
+      paintAdd: e.pointerType !== 'touch' && e.button === 2,
+      paintRectangle,
       longPressTimer: null,
     };
-    if (mode === 'fog' && e.pointerType === 'touch' && !fogRectangle)
+    if (cellPaint && e.pointerType === 'touch')
       state.drag.longPressTimer = setTimeout(() => {
         const drag = state.drag;
-        if (!drag || drag.pointerId !== e.pointerId || drag.moved || state.mode !== 'fog') return;
-        drag.fogged = true;
+        if (
+          !drag ||
+          drag.pointerId !== e.pointerId ||
+          drag.moved ||
+          drag.multiTouch ||
+          state.mode !== mode
+        )
+          return;
+        drag.paintAdd = true;
         state.paint.clear();
         paintAt(drag.x, drag.y, true);
-        toast('Ocultando casillas…');
+        toast(mode === 'fog' ? 'Ocultando casillas…' : 'Bloqueando casillas…');
       }, 500);
-    if (!forcePan && fogRectangle) {
+    if (paintRectangle) {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.selectionDraft = { start: cell, current: cell };
@@ -2282,19 +2593,25 @@ canvas.onpointerdown = (e) => {
       }
     }
   }
-  if (state.pointers.size > 1 && state.drag?.longPressTimer) {
+  if (state.pointers.size > 1 && state.drag) {
     clearTimeout(state.drag.longPressTimer);
     state.drag.longPressTimer = null;
+    state.drag.multiTouch = true;
+    if (state.drag.paintMode) {
+      cancelCellPaint();
+      state.selectionDraft = null;
+      draw();
+    }
   }
   if (forcePan) canvas.classList.add('grabbing');
-  if (!forcePan && !fogRectangle && ['block', 'unblock', 'fog'].includes(mode))
-    paintAt(e.offsetX, e.offsetY, state.drag?.fogged);
+  if (cellPaint && !paintRectangle && state.pointers.size === 1)
+    paintAt(e.offsetX, e.offsetY, state.drag.paintAdd);
 };
 canvas.addEventListener('auxclick', (e) => {
   if (e.button === 1) e.preventDefault();
 });
 canvas.addEventListener('contextmenu', (e) => {
-  if (state.mode === 'fog') e.preventDefault();
+  if (isCellPaintMode(state.mode)) e.preventDefault();
 });
 canvas.onpointermove = (e) => {
   if (!state.pointers.has(e.pointerId)) return;
@@ -2316,7 +2633,7 @@ canvas.onpointermove = (e) => {
     }
     return;
   }
-  if (state.drag) {
+  if (state.drag && !state.drag.multiTouch) {
     const mode = state.drag.forceSelect ? 'select' : state.mode,
       dx = e.offsetX - state.drag.x,
       dy = e.offsetY - state.drag.y;
@@ -2335,7 +2652,7 @@ canvas.onpointermove = (e) => {
         draw();
         publishDmView();
       }
-    } else if (mode === 'fog' && state.drag.fogRectangle && state.selectionDraft) {
+    } else if (state.drag.paintRectangle && state.selectionDraft) {
       const cell = screenToCell(e.offsetX, e.offsetY);
       if (validCell(cell)) {
         state.selectionDraft.current = cell;
@@ -2354,8 +2671,8 @@ canvas.onpointermove = (e) => {
         draw();
       }
     } else if (mode === 'draw' && state.drawStroke) addDrawPoint(e.offsetX, e.offsetY);
-    else if (!state.drag.fogRectangle && ['block', 'unblock', 'fog'].includes(mode))
-      paintAt(e.offsetX, e.offsetY, state.drag.fogged);
+    else if (!state.drag.paintRectangle && isCellPaintMode(mode))
+      paintAt(e.offsetX, e.offsetY, state.drag.paintAdd);
   }
 };
 function isTouchTap(e, drag) {
@@ -2379,25 +2696,36 @@ canvas.onpointerup = (e) => {
     state.objectDraft = null;
     state.selectionDraft = null;
     state.drag = null;
+    cancelCellPaint();
     draw();
     return;
   }
   if (was?.forcePan) {
     canvas.classList.remove('grabbing');
-  } else if (e.type === 'pointercancel') {
+  } else if (
+    e.type === 'pointercancel' ||
+    (was?.paintMode && was.scenarioId !== state.scenarioId)
+  ) {
     state.objectDraft = null;
     state.selectionDraft = null;
+    cancelCellPaint();
     draw();
   } else if (mode === 'draw' && state.drawStroke) {
     finishDrawStroke();
-  } else if (selection && mode === 'fog' && was?.fogRectangle) {
-    const area = selectionDraftArea();
+  } else if (was?.paintMode) {
+    const area = selectionDraftArea(),
+      cells = was.paintRectangle ? (area ? cellsInArea(area) : []) : [...state.paint.values()],
+      fogPaint = was.paintMode === 'fog';
     state.selectionDraft = null;
-    if (was.moved && area) {
-      const cells = cellsInArea(area);
-      applyFogCells(cells, !!was.fogged);
-      command('map.fog.paint', { cells, fogged: !!was.fogged });
-    } else draw();
+    if (cells.length) {
+      const requestId = command(fogPaint ? 'map.fog.paint' : 'map.cells.paint', {
+        cells,
+        ...(fogPaint ? { fogged: was.paintAdd } : { blocked: was.paintAdd }),
+      });
+      if (requestId && was.paintRectangle) applyPaintCells(cells, was.paintAdd, was.paintMode);
+    }
+    state.paint.clear();
+    draw();
   } else if (draft && mode === 'object') {
     const area = objectDraftArea();
     state.objectDraft = null;
@@ -2416,13 +2744,6 @@ canvas.onpointerup = (e) => {
         selectionOnly,
       });
     }
-  } else if (['block', 'unblock', 'fog'].includes(mode) && state.paint.size) {
-    const fogPaint = mode === 'fog';
-    command(fogPaint ? 'map.fog.paint' : 'map.cells.paint', {
-      cells: [...state.paint.values()],
-      ...(fogPaint ? { fogged: !!was?.fogged } : { blocked: mode === 'block' }),
-    });
-    state.paint.clear();
   } else if (was && (!was.moved || touchTap)) {
     if (!selectionOnly && maybeDoubleTap(e, was)) {
       if (!state.pointers.size) state.drag = null;
@@ -2507,14 +2828,12 @@ function handleDrawEvent(e) {
   }
   draw();
 }
-function paintAt(x, y, fogged = false) {
+function paintAt(x, y, add = false) {
   const cell = screenToCell(x, y);
   if (!validCell(cell)) return;
   state.paint.set(`${cell.x},${cell.y}`, cell);
-  const fogPaint = state.mode === 'fog',
-    collection = fogPaint ? 'foggedCells' : 'blocked',
-    exists = state.data[collection].some((item) => +item.x === cell.x && +item.y === cell.y),
-    add = fogPaint ? fogged : state.mode === 'block';
+  const collection = state.mode === 'fog' ? 'foggedCells' : 'blocked',
+    exists = state.data[collection].some((item) => +item.x === cell.x && +item.y === cell.y);
   if (add && !exists) state.data[collection].push(cell);
   if (!add && exists)
     state.data[collection] = state.data[collection].filter(
@@ -2523,6 +2842,7 @@ function paintAt(x, y, fogged = false) {
   draw();
 }
 function tap(x, y, options = {}) {
+  if (!state.data || state.user?.role === 'GUEST') return;
   const c = screenToCell(x, y),
     selectionOnly = state.user.role === 'DM' && !!options.selectionOnly,
     mode = selectionOnly ? 'select' : state.mode;
@@ -2545,22 +2865,35 @@ function tap(x, y, options = {}) {
     command('token.clone', { kind: state.cloneSource.kind, id: +state.cloneSource.id, ...c });
     return;
   }
-  if (state.encounterSelecting && state.user.role === 'DM') {
+  if (mode === 'note' && state.user.role === 'DM') {
+    void editCellNote(c);
+    return;
+  }
+  if (
+    state.encounterSelecting &&
+    state.user.role === 'DM' &&
+    mode === 'select' &&
+    !state.pendingTurn
+  ) {
     const tokens = tokensAtCell(c).filter(
       (t) =>
         (t.kind === 'PLAYER' && +t.placed) || (t.kind === 'NPC' && +t.visible && +t.health > 0),
     );
     if (tokens.length) {
       const t = tokens[0],
-        set = t.kind === 'PLAYER' ? state.selectedPlayers : state.selectedNpcs,
-        id = +t.id;
-      set.has(id) ? set.delete(id) : set.add(id);
+        key = `${t.kind}:${t.id}`;
+      toggleSetItem(state.encounterDraft, key);
+      renderEncounterDraft();
       draw();
-      toast(`${set.has(id) ? 'Incluido' : 'Excluido'}: ${t.name || t.user_name}`);
+      toast(`${state.encounterDraft.has(key) ? 'Incluido' : 'Excluido'}: ${t.name || t.user_name}`);
     }
     return;
   }
   if (mode === 'path') {
+    if (state.user.role === 'PLAYER' && foggedCellSet().has(blockedKey(c))) {
+      toast('No puedes trazar un camino por casillas ocultas por la niebla.');
+      return;
+    }
     const own = controlledPlayer();
     if (!own) {
       toast('Selecciona y coloca en el mapa el personaje que quieres mover');
@@ -2949,6 +3282,7 @@ $('#apply-path').onclick = () => {
   if (!state.path.length) return toast('Selecciona un camino');
   command('movement.submit', { characterId: +own.character_id, path: state.path });
   state.path = [];
+  refreshInterface();
   draw();
 };
 function beginCharacterPlacement() {
@@ -2964,8 +3298,7 @@ function beginCharacterPlacement() {
   setMode('place');
   toast('Toca una casilla para colocar el personaje');
 }
-$('#place-character').onclick = beginCharacterPlacement;
-$('#dm-place-character').onclick = beginCharacterPlacement;
+
 $('#delay-turn').onclick = async () => {
   if (!selectedCharacterHasTurn()) return toast('El personaje seleccionado no tiene el turno');
   const options = state.data.participants.filter(
@@ -3006,8 +3339,7 @@ function tokensAtCell(c) {
   for (const n of state.data.npcs)
     if (+n.x === c.x && +n.y === c.y) tokens.push({ ...n, kind: 'NPC' });
   for (const p of state.data.players)
-    if ((+p.placed || state.user.role === 'DM') && +p.x === c.x && +p.y === c.y)
-      tokens.push({ ...p, kind: 'PLAYER' });
+    if (+p.placed && +p.x === c.x && +p.y === c.y) tokens.push({ ...p, kind: 'PLAYER' });
   return tokens;
 }
 function toggleSetItem(set, id) {
@@ -3015,6 +3347,7 @@ function toggleSetItem(set, id) {
 }
 function selectEntitiesInArea(area) {
   if (state.encounterSelecting && state.user.role === 'DM') {
+    if (state.pendingTurn) return;
     for (const p of state.data.players)
       if (
         +p.placed &&
@@ -3023,7 +3356,7 @@ function selectEntitiesInArea(area) {
         +p.y >= area.y &&
         +p.y < area.y + area.heightCells
       )
-        toggleSetItem(state.selectedPlayers, +p.id);
+        toggleSetItem(state.encounterDraft, `PLAYER:${p.id}`);
     for (const n of state.data.npcs)
       if (
         +n.visible &&
@@ -3033,7 +3366,8 @@ function selectEntitiesInArea(area) {
         +n.y >= area.y &&
         +n.y < area.y + area.heightCells
       )
-        toggleSetItem(state.selectedNpcs, +n.id);
+        toggleSetItem(state.encounterDraft, `NPC:${n.id}`);
+    renderEncounterDraft();
     draw();
     return;
   }
@@ -3062,6 +3396,16 @@ function selectEntitiesInArea(area) {
   draw();
 }
 function selectMapEntity(entity, additive = false) {
+  if (
+    state.user?.role === 'GUEST' ||
+    (state.user?.role === 'PLAYER' &&
+      (entity.kind !== 'PLAYER' || +entity.user_id !== +state.user.id))
+  )
+    return;
+  if (state.encounterSelecting) {
+    inspect(entity);
+    return;
+  }
   if (canUsePlayerCharacters() && entity.kind === 'PLAYER' && +entity.user_id === +state.user.id) {
     state.selectedCharacter = +entity.character_id;
     state.path = [];
@@ -3089,12 +3433,18 @@ function clearEntitySelection(resetInspector = true) {
   state.selectedNpcs.clear();
   state.selectedPlayers.clear();
   draw();
-  if (resetInspector)
-    $('#inspector').innerHTML =
-      '<h2>Selección</h2><p class="muted">Toca un token para inspeccionarlo.</p>';
+  if (resetInspector) {
+    state.inspected = null;
+    state.inspectorOpen = false;
+    state.inspectorToken = null;
+    if ($('#inspector').contains($('#delay-turn'))) $('#own-turn-actions').append($('#delay-turn'));
+    $('#inspector').innerHTML = '';
+    refreshInterface();
+  }
 }
 function selectionItems() {
   const items = [];
+  if (!state.data) return items;
   state.selectedObjects = new Set(
     [...state.selectedObjects].filter((id) => state.data.objects.some((o) => +o.id === id)),
   );
@@ -3114,14 +3464,14 @@ function selectionItems() {
 function selectionCount() {
   return state.selectedObjects.size + state.selectedNpcs.size;
 }
-function renderEntitySelection() {
+function renderEntitySelection(refresh = false) {
   const items = selectionItems();
   if (!items.length) {
     clearEntitySelection();
     return;
   }
   if (items.length === 1) {
-    inspect(items[0]);
+    inspect(items[0], refresh);
     return;
   }
   const objectCount = items.filter((x) => x.kind === 'OBJECT').length,
@@ -3136,9 +3486,11 @@ function renderEntitySelection() {
     ]
       .filter(Boolean)
       .join(' y ');
+  if ($('#inspector').contains($('#delay-turn'))) $('#own-turn-actions').append($('#delay-turn'));
   i.innerHTML = `<h2>Selección múltiple</h2><div class="token-card"><strong>${summary}</strong><p class="muted">${items.map((x) => esc(x.name)).join(', ')}</p><div class="row">${copyableNpcs.length >= 2 ? '<button id="bulk-copy">Copiar</button>' : ''}${healable.length ? '<button id="bulk-heal" class="ok-action">Curar</button>' : ''}<button id="bulk-show">Hacer visibles</button><button id="bulk-hide">Ocultar</button><button id="bulk-image">Imagen común…</button><button id="bulk-delete" class="danger-action">Eliminar</button><button id="bulk-clear">Limpiar selección</button></div></div>`;
-  activateDmPanelTab('inspector', true);
-  i.scrollTop = 0;
+  state.inspected = null;
+  if (!refresh) showInspector(true);
+  refreshInterface();
   if ($('#bulk-copy'))
     $('#bulk-copy').onclick = () => {
       state.tokenClipboard = {
@@ -3160,8 +3512,7 @@ function renderEntitySelection() {
   $('#bulk-clear').onclick = () => clearEntitySelection();
 }
 async function healTokens(tokens) {
-  if (state.user.role === 'PLAYER')
-    tokens = tokens.filter((t) => t.kind === 'PLAYER' && +t.user_id === +state.user.id);
+  if (state.user.role !== 'DM') return;
   const values = await openForm({
     title: 'Curar',
     description:
@@ -3188,7 +3539,7 @@ async function healTokens(tokens) {
       current = displayHp(t.health, t),
       next = max > 0 ? Math.min(max, current + amount) : current + amount;
     t.health = next;
-    command(state.user.role === 'PLAYER' ? 'player.health.set' : 'health.set', {
+    command('health.set', {
       kind: t.kind,
       id: +t.id,
       health: next,
@@ -3208,39 +3559,81 @@ function showCellMenu(tokens, x, y, additive = false) {
     };
     menu.append(b);
   });
-  menu.style.left = Math.min(x, canvas.clientWidth - 290) + 'px';
-  menu.style.top = Math.min(y, canvas.clientHeight - 220) + 'px';
+  menu.style.left = Math.max(8, Math.min(x, canvas.clientWidth - 290)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, canvas.clientHeight - 220)) + 'px';
   menu.hidden = false;
 }
-function inspect(t) {
-  clearTimeout(state.inspectorSaveTimer);
-  if (state.user.role === 'DM') activateDmPanelTab('inspector', true);
-  const i = $('#inspector'),
-    encounterOn = state.data?.encounter && state.data.encounter.state !== 'OFF',
+function inspectedToken() {
+  if (!state.inspected || !state.data) return null;
+  const { kind, id } = state.inspected;
+  const list =
+    kind === 'PLAYER' ? state.data.players : kind === 'NPC' ? state.data.npcs : state.data.objects;
+  const token = list.find((item) => +item.id === +id);
+  return token ? { ...token, kind } : null;
+}
+function inspect(t, refresh = false) {
+  if (
+    state.user.role === 'GUEST' ||
+    (state.user.role === 'PLAYER' && (t.kind !== 'PLAYER' || +t.user_id !== +state.user.id))
+  )
+    return;
+  const i = $('#inspector');
+  const same = state.inspected?.kind === t.kind && +state.inspected?.id === +t.id;
+  if (same && state.inspectorToken) {
+    Object.assign(state.inspectorToken, t);
+    t = state.inspectorToken;
+  } else {
+    clearTimeout(state.inspectorSaveTimer);
+    state.inspectorSaveTimer = null;
+    state.inspectorToken = t;
+  }
+  state.inspected = { kind: t.kind, id: +t.id };
+  if (!refresh) showInspector(true);
+  if (refresh && same && (i.contains(document.activeElement) || state.inspectorSaveTimer)) {
+    if ($('#inspect-health-display'))
+      $('#inspect-health-display').textContent = String(displayHp(t.health, t));
+    if ($('#inspect-current-hp'))
+      $('#inspect-current-hp').textContent = String(displayHp(t.health, t));
+    if ($('#inspect-health-track'))
+      $('#inspect-health-track').style.setProperty(
+        '--health',
+        `${Math.max(0, Math.min(100, (+t.health / Math.max(1, +t.max_health)) * 100))}%`,
+      );
+    return;
+  }
+  const previousScroll = i.parentElement.scrollTop;
+  const encounterOn = state.data?.encounter && state.data.encounter.state !== 'OFF',
     combatOn = state.data?.encounter && state.data.encounter.state === 'RUNNING',
-    canSelfHeal =
-      state.user.role === 'PLAYER' && t.kind === 'PLAYER' && +t.user_id === +state.user.id,
     canEndTurn = state.user.role === 'DM' && t.kind === 'NPC' && combatOn && isCurrent(t),
     canClone = state.user.role === 'DM' && t.kind !== 'PLAYER' && !canEndTurn,
     cloneActive =
       state.cloneSource && state.cloneSource.kind === t.kind && +t.id === +state.cloneSource.id;
   const maxHealth = Number(t.max_health ?? t.health ?? 0),
     damageReceived = Math.max(0, maxHealth - Number(t.health ?? maxHealth));
-  let html = `<h2>Selección</h2><div class="token-card"><div class="inspect-title"><strong>${esc(t.name || t.user_name)}</strong>${t.kind === 'PLAYER' && state.user.role === 'DM' ? `<span class="draw-color-dot" style="--draw-color:${drawingColorForToken(t)}" title="Color de dibujo"></span>` : ''}${t.kind === 'NPC' && state.user.role === 'DM' && t.codex_creature_id ? '<button id="inspect-creature-info" type="button" class="info-button" title="Ver ficha de criatura">i</button>' : ''}</div><p>${esc(t.kind)}</p>`;
+  let html = `<div class="b-inspector-header">${avatar(t)}<div class="b-inspector-identity"><h2>${esc(t.name || t.user_name)}</h2><p>${t.kind === 'PLAYER' ? 'Personaje de jugador' : t.kind === 'NPC' ? 'NPC' : 'Objeto'}${t.visible !== undefined && !+t.visible ? ' · Oculto' : ''}${t.health !== undefined && +t.health <= 0 ? ' · Caído' : ''}</p></div><button id="inspect-close" class="icon-button" type="button" aria-label="Cerrar Inspector">${icon('close')}</button></div><div class="token-card">${t.kind === 'NPC' && state.user.role === 'DM' && t.codex_creature_id ? '<button id="inspect-creature-info" type="button">Ver ficha de criatura</button>' : ''}`;
+  if (t.health !== undefined)
+    html += `<div class="health-value"><span id="inspect-health-display">${displayHp(t.health, t)}</span> <small>/ ${maxHealth} PV</small></div><div class="health-track"><i id="inspect-health-track" style="--health:${Math.max(0, Math.min(100, (+t.health / Math.max(1, maxHealth)) * 100))}%"></i></div>`;
   if (state.user.role === 'DM')
-    html += `<div class="row inspect-top-actions">${canEndTurn ? '<button id="inspect-end-turn" class="primary">Terminar Turno</button>' : canClone ? `<button id="inspect-clone" class="${cloneActive ? 'active' : ''}">Clonar</button>` : ''}<button id="inspect-move">Mover aquí…</button>${t.kind === 'NPC' ? '<button id="inspect-rotate-left" title="Rotar -45°">↶</button><button id="inspect-rotate-right" title="Rotar +45°">↷</button>' : ''}</div>`;
+    html += `<div class="inspect-top-actions">${canEndTurn ? '<button id="inspect-end-turn" class="primary">Terminar turno</button>' : canClone ? `<button id="inspect-clone" class="${cloneActive ? 'active' : ''}">Clonar</button>` : ''}<button id="inspect-move">Mover aquí…</button></div>`;
+  if (t.kind === 'NPC' || (t.kind === 'PLAYER' && +t.user_id === +state.user.id))
+    html += `<div class="inspector-rotation"><button id="inspect-rotate-left" type="button" aria-label="Rotar menos 45 grados">${icon('rotate')}−45°</button><button id="inspect-rotate-right" type="button" aria-label="Rotar más 45 grados">${icon('rotate')}+45°</button></div>`;
+  if (t.kind === 'PLAYER' && +t.user_id === +state.user.id)
+    html +=
+      '<button id="inspect-avatar" type="button">Personalizar avatar</button><div id="inspect-own-turn"></div>';
   if (t.health !== undefined) {
-    if (encounterOn)
+    if (state.user.role === 'DM' && encounterOn)
       html += `<label><span>Daño Recibido</span><div class="inline-search"><strong id="inspect-damage-total" class="damage-total">${esc(damageReceived)}</strong><input id="inspect-damage" type="number" min="0" step="1" value="" placeholder="Daño nuevo"></div><small>Total recibido / daño a añadir. PV actual: <span id="inspect-current-hp">${esc(displayHp(t.health, t))}</span> / ${esc(maxHealth)}.</small></label>`;
-    else
+    else if (state.user.role === 'DM')
       html += `<label><span>Vida de ${esc(t.name || t.user_name || 'Token')}</span><div class="inline-search"><input id="inspect-hp" type="number" value="${+t.health}" title="Vida actual"><span class="muted" style="align-self:center">/</span><input id="inspect-max-hp" type="number" min="1" value="${esc(maxHealth || +t.health)}" title="Vida máxima"></div><small>Vida actual / vida máxima.</small></label>`;
-    if (state.user.role === 'DM' || canSelfHeal)
+    if (state.user.role === 'DM')
       html += '<button id="inspect-heal" class="ok-action">Curar</button>';
   }
+  if (state.user.role === 'DM' && t.kind !== 'OBJECT') html += '<div class="stat-grid">';
   if (t.kind === 'NPC' && state.user.role === 'DM')
-    html += `<label>Clase de armadura<input id="inspect-ac" type="number" value="${t.armor_class ?? ''}" placeholder="Sin CA"></label>`;
-  if (t.initiative !== undefined)
-    html += `<label>Iniciativa<input id="inspect-init" type="number" value="${t.initiative ?? ''}"></label>`;
+    html += `<label><span>Clase de armadura</span><input id="inspect-ac" type="number" value="${t.armor_class ?? ''}" placeholder="Sin CA"></label>`;
+  if (t.initiative !== undefined && state.user.role === 'DM')
+    html += `<label><span>Iniciativa</span><input id="inspect-init" type="number" value="${t.initiative ?? ''}"></label>`;
+  if (state.user.role === 'DM' && t.kind !== 'OBJECT') html += '</div>';
   if (t.kind === 'PLAYER' && state.user.role === 'DM')
     html += `<label>Notas privadas del jugador<textarea id="inspect-player-notes" rows="6">${esc(t.dm_notes || '')}</textarea></label>`;
   if (t.kind !== 'PLAYER' && state.user.role === 'DM')
@@ -3260,9 +3653,32 @@ function inspect(t) {
     html += `<div class="row inspect-bottom-actions"><button id="inspect-save">Guardar</button>${t.kind !== 'PLAYER' ? '<button id="inspect-delete" class="danger-action">Eliminar</button>' : ''}</div>`;
   }
   html += '</div>';
+  if ($('#inspector').contains($('#delay-turn'))) $('#own-turn-actions').append($('#delay-turn'));
   i.innerHTML = html;
-  i.scrollTop = 0;
-  if (canSelfHeal && $('#inspect-heal')) $('#inspect-heal').onclick = () => healTokens([t]);
+  i.parentElement.scrollTop = refresh ? previousScroll : 0;
+  $('#inspect-close').onclick = () => showInspector(false);
+  if ($('#inspect-own-turn')) $('#inspect-own-turn').append($('#delay-turn'));
+  if ($('#inspect-avatar'))
+    $('#inspect-avatar').onclick = () => {
+      state.selectedCharacter = +t.character_id;
+      openImagePicker('avatar');
+    };
+  if ($('#inspect-rotate-left'))
+    $('#inspect-rotate-left').onclick = () =>
+      command(t.kind === 'PLAYER' ? 'player.rotate' : 'token.rotate', {
+        kind: t.kind,
+        id: +t.id,
+        delta: -45,
+      });
+  if ($('#inspect-rotate-right'))
+    $('#inspect-rotate-right').onclick = () =>
+      command(t.kind === 'PLAYER' ? 'player.rotate' : 'token.rotate', {
+        kind: t.kind,
+        id: +t.id,
+        delta: 45,
+      });
+  updateDelayTurnControl();
+  refreshInterface();
   if (state.user.role === 'DM') {
     if ($('#inspect-visible'))
       $('#inspect-visible').onchange = (e) =>
@@ -3283,40 +3699,39 @@ function inspect(t) {
       command('health.set', { kind: t.kind, id: +t.id, health: next });
     };
     const card = i.querySelector('.token-card');
+    const inspectorScenario = state.scenarioId;
     const saveInspect = () => {
+      state.inspectorSaveTimer = null;
+      if (inspectorScenario !== state.scenarioId) return;
       if (!card.isConnected || !i.contains(card)) return;
       applyIncomingDamage();
-      if ($('#inspect-hp'))
+      const dirty = (id) => $('#' + id)?.dataset.dirty === 'true';
+      if (dirty('inspect-hp') || dirty('inspect-max-hp'))
         command('health.set', {
           kind: t.kind,
           id: +t.id,
-          health: +$('#inspect-hp').value,
-          ...($('#inspect-max-hp') ? { maxHealth: +$('#inspect-max-hp').value } : {}),
+          health: dirty('inspect-hp') ? +$('#inspect-hp').value : +t.health,
+          ...(dirty('inspect-max-hp') ? { maxHealth: +$('#inspect-max-hp').value } : {}),
         });
-      if ($('#inspect-init')) {
+      if (dirty('inspect-init')) {
         const initiative = $('#inspect-init').value === '' ? null : +$('#inspect-init').value;
         const previous = t.initiative == null ? null : +t.initiative;
         if (initiative !== previous)
           command('initiative.set', { kind: t.kind, id: +t.id, initiative });
       }
       if (t.kind !== 'PLAYER') {
-        const changes = {
-          kind: t.kind,
-          id: +t.id,
-          name: $('#inspect-name').value,
-          notes: $('#inspect-notes').value,
-        };
-        if (t.kind === 'OBJECT') {
-          changes.width_cells = +$('#inspect-width').value;
-          changes.height_cells = +$('#inspect-height').value;
-          changes.visible = $('#inspect-visible').checked;
-        } else if (t.kind === 'NPC') {
-          changes.visible = $('#inspect-visible').checked;
+        const changes = { kind: t.kind, id: +t.id };
+        if (dirty('inspect-name')) changes.name = $('#inspect-name').value;
+        if (dirty('inspect-notes')) changes.notes = $('#inspect-notes').value;
+        if (dirty('inspect-width')) changes.width_cells = +$('#inspect-width').value;
+        if (dirty('inspect-height')) changes.height_cells = +$('#inspect-height').value;
+        if (dirty('inspect-ac'))
           changes.armor_class = $('#inspect-ac').value === '' ? null : +$('#inspect-ac').value;
-        }
-        command('token.update', changes);
-      } else
+        if (Object.keys(changes).length > 2) command('token.update', changes);
+      } else if (dirty('inspect-player-notes'))
         command('player.note', { playerId: +t.user_id, notes: $('#inspect-player-notes').value });
+      if (state.ws?.readyState === 1)
+        card.querySelectorAll('[data-dirty]').forEach((field) => delete field.dataset.dirty);
     };
     $('#inspect-save').onclick = saveInspect;
     if ($('#inspect-damage')) {
@@ -3343,6 +3758,7 @@ function inspect(t) {
       const el = $('#' + id);
       if (el)
         el.addEventListener('input', () => {
+          el.dataset.dirty = 'true';
           clearTimeout(state.inspectorSaveTimer);
           state.inspectorSaveTimer = setTimeout(saveInspect, 650);
         });
@@ -3352,12 +3768,7 @@ function inspect(t) {
       state.moveToken = t;
       toast('Toca la casilla de destino');
     };
-    if ($('#inspect-rotate-left'))
-      $('#inspect-rotate-left').onclick = () =>
-        command('token.rotate', { kind: 'NPC', id: +t.id, delta: -45 });
-    if ($('#inspect-rotate-right'))
-      $('#inspect-rotate-right').onclick = () =>
-        command('token.rotate', { kind: 'NPC', id: +t.id, delta: 45 });
+
     if ($('#inspect-creature-info'))
       $('#inspect-creature-info').onclick = () => openNpcCreatureInfo(+t.codex_creature_id);
     if ($('#inspect-include-combat'))
@@ -3401,6 +3812,33 @@ function participantName(p) {
   const x = state.data.npcs.find((v) => +v.id === +p.actor_id);
   return x?.name || 'NPC';
 }
+
+initInterface({
+  cancelDraft: cancelEncounterDraft,
+  hasSelection: () => !state.encounterSelecting && selectionCount() > 0,
+  inspectedToken,
+  cancelMapAction: () => {
+    state.selectedMovementPreview = null;
+    state.path = [];
+    $('#cell-menu').hidden = true;
+    setMode('pan');
+  },
+  pageChanged: async (page) => {
+    if (page === 'map') {
+      requestAnimationFrame(resize);
+      return;
+    }
+    if (page === 'codex') await openCodexLibrary();
+    if (page === 'chat') {
+      $('#chat-status').textContent = state.scenarioId
+        ? ''
+        : 'Abre un escenario para acceder a sus conversaciones.';
+      await loadChatThreads();
+      if (state.user.role === 'PLAYER' && state.chatThreads.length && !state.openChats.size)
+        await openChat(+state.chatThreads[0].id, 'Chat con DM', false);
+    }
+  },
+});
 
 // Restore the cookie-backed session on every page load, after all handlers are installed.
 start().catch((error) => {

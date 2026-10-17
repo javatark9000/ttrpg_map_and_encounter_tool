@@ -7,19 +7,136 @@ import {
   releaseDialog,
 } from './dialogs.js';
 import { state } from './state.js';
+import { icon, updateList } from './interface.js';
 
 const codexDialog = $('#codex-dialog');
 $('#codex-close').onclick = () => codexDialog.close();
 $('#codex-edit').onclick = () => {};
 const codexStack = [];
 $('#codex-back').onclick = () => codexGoBack();
-$('#codex-button').onclick = async () => {
+$('#codex-customize').onclick = () => openCustomizeSearch();
+let libraryCategories = null,
+  libraryCategory = null,
+  libraryQuery = '',
+  libraryPage = 1,
+  libraryLoadId = 0;
+export async function openCodexLibrary() {
+  if (libraryCategories) return;
+  $('#library-codex-status').textContent = 'Cargando categorías…';
   try {
-    await openCodex();
-  } catch (e) {
-    toast(e.message);
+    const data = await api('/codex/categories');
+    libraryCategories = data.categories;
+    $('#codex-categories').innerHTML = libraryCategories
+      .map(
+        (category, index) =>
+          `<button type="button" id="library-category-${index}" data-category-index="${index}">${icon(category.code === 'creatures' ? 'shield' : category.code === 'items' ? 'box' : 'book')}${esc(category.name)}</button>`,
+      )
+      .join('');
+    $('#codex-categories')
+      .querySelectorAll('button')
+      .forEach(
+        (button) =>
+          (button.onclick = () => {
+            libraryCategory = libraryCategories[+button.dataset.categoryIndex];
+            libraryQuery = '';
+            $('#library-codex-search').value = '';
+            loadLibraryRecords(1);
+          }),
+      );
+    libraryCategory = libraryCategories[0];
+    $('#codex-search-form').onsubmit = (event) => {
+      event.preventDefault();
+      libraryQuery = $('#library-codex-search').value.trim();
+      loadLibraryRecords(1);
+    };
+    await loadLibraryRecords(1);
+  } catch (error) {
+    libraryCategories = null;
+    $('#library-codex-status').textContent = error.message;
+    $('#library-codex-results').innerHTML =
+      '<button type="button" id="codex-retry">Reintentar</button>';
+    $('#codex-retry').onclick = openCodexLibrary;
   }
-};
+}
+async function loadLibraryRecords(page = 1) {
+  if (!libraryCategory) return;
+  const loadId = ++libraryLoadId;
+  const category = libraryCategory;
+  libraryPage = page;
+  $('#library-codex-category').textContent = category.name;
+  $('#codex-categories')
+    .querySelectorAll('button')
+    .forEach((button) => {
+      const active = libraryCategories[+button.dataset.categoryIndex].code === category.code;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  $('#library-codex-status').textContent = 'Buscando…';
+  try {
+    const data = await api(
+      `/codex/category-records?category=${encodeURIComponent(category.code)}&q=${encodeURIComponent(libraryQuery)}&page=${page}&limit=15`,
+    );
+    if (loadId !== libraryLoadId) return;
+    $('#library-codex-status').textContent = data.random
+      ? 'Una selección del archivo. Busca para explorar todos los resultados.'
+      : `${+data.total} resultados`;
+    const records = data.records || [];
+    updateList(
+      $('#library-codex-results'),
+      records.length
+        ? records
+            .map(
+              (record) =>
+                `<button type="button" id="library-record-${+record.id}" data-codex-record="${+record.id}" class="codex-card"><span class="codex-emblem">${icon(category.code === 'creatures' ? 'shield' : category.code === 'items' ? 'box' : 'book')}</span><small>${esc([record.type_name || record.category_name || category.name, record.source_name].filter(Boolean).join(' · '))}</small><h3>${esc(record.name)}</h3>${record.short_description ? `<p>${esc(record.short_description)}</p>` : ''}<small>Ver ficha ${icon('chevron')}</small></button>`,
+            )
+            .join('')
+        : '<div class="empty-state"><h3>Sin coincidencias</h3><p>Prueba otro nombre o etiqueta.</p><button type="button" id="codex-clear-search">Limpiar búsqueda</button></div>',
+    );
+    $('#codex-clear-search')?.addEventListener('click', () => {
+      libraryQuery = '';
+      $('#library-codex-search').value = '';
+      loadLibraryRecords(1);
+    });
+    $('#library-codex-results')
+      .querySelectorAll('[data-codex-record]')
+      .forEach(
+        (button) =>
+          (button.onclick = async () => {
+            try {
+              codexStack.length = 0;
+              await openCodexRecordDetail(category, +button.dataset.codexRecord, libraryQuery);
+              codexStack.length = 0;
+              $('#codex-back').hidden = true;
+              if (!codexDialog.open) codexDialog.showModal();
+            } catch (error) {
+              toast(error.message);
+            }
+          }),
+      );
+    updateList(
+      $('#library-codex-pagination'),
+      !data.random && +data.pages > 1
+        ? `<button type="button" id="library-codex-prev" ${page <= 1 ? 'disabled' : ''}>Anterior</button><span>Página ${page} de ${+data.pages}</span><button type="button" id="library-codex-next" ${page >= +data.pages ? 'disabled' : ''}>Siguiente</button>`
+        : '',
+    );
+    $('#library-codex-prev')?.addEventListener('click', () => loadLibraryRecords(libraryPage - 1));
+    $('#library-codex-next')?.addEventListener('click', () => loadLibraryRecords(libraryPage + 1));
+  } catch (error) {
+    if (loadId !== libraryLoadId) return;
+    $('#library-codex-status').textContent = error.message;
+  }
+}
+document.addEventListener('keydown', (event) => {
+  if (
+    event.key === '/' &&
+    state.page === 'codex' &&
+    !event.target.closest('input,textarea,select,[contenteditable]') &&
+    !document.querySelector('dialog[open]')
+  ) {
+    event.preventDefault();
+    $('#library-codex-search').focus();
+  }
+});
 function slug(text) {
   return String(text || '')
     .toLowerCase()
@@ -627,49 +744,13 @@ function creatureCustomFields(r, o, edit = false) {
   ];
 }
 export async function openNpcCreatureInfo(id) {
-  let panel = $('#creature-info-popover');
-  if (!panel) {
-    panel = document.createElement('aside');
-    panel.id = 'creature-info-popover';
-    panel.className = 'creature-info-popover';
-    document.body.append(panel);
-  }
-  panel.innerHTML =
-    '<header><strong>Cargando…</strong><button type="button" class="icon-button">×</button></header><div class="creature-info-body"></div>';
-  panel.querySelector('button').onclick = () => panel.remove();
   try {
-    const data = await api(`/codex/record?category=creatures&id=${id}`),
-      r = data.record,
-      labels = data.labels || {};
-    const fields = [
-      ['Tipo', labels.type],
-      ['Tamaño', labels.size],
-      ['CA', r.armor_class_text],
-      ['PV', r.hit_points_text],
-      ['Velocidad', r.speed_text],
-      ['STR', formatAbilityScore(r.strength)],
-      ['DEX', formatAbilityScore(r.dexterity)],
-      ['CON', formatAbilityScore(r.constitution)],
-      ['INT', formatAbilityScore(r.intelligence)],
-      ['WIS', formatAbilityScore(r.wisdom)],
-      ['CHA', formatAbilityScore(r.charisma)],
-      ['Tiradas de salvación', r.saving_throws_text],
-      ['Habilidades', r.skills_text],
-      ['Resistencias', r.damage_resistances_text],
-      ['Inmunidades', r.damage_immunities_text],
-      ['Vulnerabilidades', r.damage_vulnerabilities_text],
-      ['Condiciones inmunes', r.condition_immunities_text],
-      ['Sentidos', r.senses_text],
-      ['Idiomas', r.languages_text],
-      ['Desafío', r.challenge_rating_text],
-      ['Entorno', r.environment_text],
-      ['Tags', data.tags?.join(', ')],
-    ].filter((x) => x[1]);
-    const primary = data.media?.find((m) => m.purpose === 'portrait') || data.media?.[0];
-    panel.innerHTML = `<header><strong>${esc(r.name)}</strong><button type="button" class="icon-button" aria-label="Cerrar">×</button></header><div class="creature-info-body">${primary ? `<a class="codex-portrait" href="${esc(primary.url)}" target="_blank" rel="noopener"><img src="${esc(primary.url)}" alt="${esc(primary.altText || r.name)}"></a>` : ''}<dl>${fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${r.traits_text ? `<h4>Rasgos</h4><div class="description">${esc(r.traits_text)}</div>` : ''}${r.description ? `<h4>Descripción</h4><div class="description">${esc(r.description)}</div>` : ''}</div>`;
-    panel.querySelector('button').onclick = () => panel.remove();
-  } catch (e) {
-    panel.querySelector('.creature-info-body').innerHTML = `<p class="error">${esc(e.message)}</p>`;
+    codexStack.length = 0;
+    await renderCodexGenericDetail({ code: 'creatures', name: 'Criaturas' }, id);
+    $('#codex-back').hidden = true;
+    if (!codexDialog.open) codexDialog.showModal();
+  } catch (error) {
+    toast(error.message);
   }
 }
 function itemCustomFields(r, o, edit = false) {
