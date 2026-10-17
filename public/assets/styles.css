@@ -2497,6 +2497,55 @@ body:not(.is-guest) .guest-only,
   }
 }
 @media (orientation: portrait) {
+  .is-player .b-library:has(#chat-page:not([hidden])) {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+  }
+  .is-player .b-library:has(#chat-page:not([hidden])) .b-library-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+  .is-player .b-library:has(#chat-page:not([hidden])) .b-panel-top,
+  .is-player #chat-page > .page-heading,
+  .is-player #chat-status:empty {
+    display: none;
+  }
+  .is-player .b-library:has(#chat-page:not([hidden])) .b-panel-content,
+  .is-player #chat-page {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+    overflow: hidden;
+  }
+  .is-player #chat-status:not(:empty) {
+    margin: 0;
+    padding: 16px;
+  }
+  .is-player #chat-page .activity-layout {
+    flex: 1;
+    min-height: 0;
+    max-width: none;
+    width: 100%;
+    margin: 0;
+  }
+  .is-player #chat-windows {
+    min-height: 0;
+  }
+  .is-player .chat-window {
+    min-height: 0;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
   .is-player .scene-overview,
   .is-player #selected-token {
     top: 54px;

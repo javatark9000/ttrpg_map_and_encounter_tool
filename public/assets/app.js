@@ -771,6 +771,7 @@ async function openChat(chatId, title = 'Chat', focus = true) {
     win.querySelector('.icon-button').onclick = () => {
       state.openChats.delete(chatId);
       win.remove();
+      if (state.user.role === 'PLAYER') navigate('map');
     };
     win.querySelector('form').onsubmit = (e) => {
       e.preventDefault();
