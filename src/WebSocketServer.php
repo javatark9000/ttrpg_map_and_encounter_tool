@@ -123,7 +123,11 @@ final class WebSocketServer
                 if (($this->meta[$from->id]['scenario'] ?? null) !== $scenarioId) {
                     throw new RuntimeException('Suscríbete al escenario antes de lanzar.');
                 }
-                $roll = $this->game->startDiceRoll($scenarioId, $user);
+                $roll = $this->game->startDiceRoll(
+                    $scenarioId,
+                    $user,
+                    array_key_exists('sides', $m) ? $m['sides'] : 20,
+                );
                 $revealed = $this->game->revealDiceRoll((int) $roll['id']);
                 if (!$revealed) {
                     throw new RuntimeException('No se pudo revelar el resultado del dado.');
@@ -135,6 +139,7 @@ final class WebSocketServer
                     'scenarioId' => $scenarioId,
                     'rollId' => $roll['id'],
                     'rollerName' => $roll['rollerName'],
+                    'sides' => $roll['sides'],
                 ]);
                 $this->broadcastDice($worker, $scenarioId, [
                     'type' => 'dice.roll.revealed',

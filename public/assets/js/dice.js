@@ -1,17 +1,7 @@
 // Presentation only: the server supplies the result. No roll is decided here.
-import {
-  vertices,
-  faces,
-  add,
-  sub,
-  mul,
-  dot,
-  cross,
-  unit,
-  rotationMatrix,
-  transform,
-} from './dice-geometry.js';
+import { add, sub, mul, dot, cross, unit, rotationMatrix, transform } from './dice-geometry.js';
 import { createPhysicalThrow, samplePhysicalThrow, tableOutline } from './dice-motion.js';
+import { getDiceModel } from './dice-models.js';
 
 const TILE = 256,
   ATLAS_WIDTH = TILE * 4,
@@ -20,9 +10,13 @@ const LENS = 3.08;
 
 function faceUV(face, point) {
   const local = sub(point, face.center);
-  return [0.5 + dot(local, face.right) * 0.88, 0.55 - dot(local, face.up) * 0.88];
+  const scale = face.uvScale ?? 0.88;
+  return [
+    0.5 + dot(local, face.right) * scale,
+    (face.uvCenter ?? 0.55) - dot(local, face.up) * scale,
+  ];
 }
-function makeMesh() {
+function makeMesh({ vertices, faces }) {
   const data = [];
   const triangle = (points, normal, face = null) => {
     for (const point of points) {
@@ -39,13 +33,16 @@ function makeMesh() {
   };
   const edges = new Map();
   faces.forEach((face) => {
-    triangle(face.points, face.normal, face);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 1; i < face.points.length - 1; i++)
+      triangle([face.points[0], face.points[i], face.points[i + 1]], face.normal, face);
+    for (let i = 0; i < face.indices.length; i++) {
       const a = face.indices[i],
-        b = face.indices[(i + 1) % 3];
+        b = face.indices[(i + 1) % face.indices.length];
       const key = [a, b].sort((x, y) => x - y).join(':');
       if (!edges.has(key)) edges.set(key, []);
-      edges.get(key).push({ face, a, b, p: face.points[i], q: face.points[(i + 1) % 3] });
+      edges
+        .get(key)
+        .push({ face, a, b, p: face.points[i], q: face.points[(i + 1) % face.points.length] });
     }
   });
   for (const [a, b] of edges.values()) {
@@ -72,7 +69,7 @@ function makeMesh() {
   return new Float32Array(data);
 }
 
-function makeAtlas() {
+function makeAtlas({ faces }) {
   const atlas = document.createElement('canvas');
   atlas.width = ATLAS_WIDTH;
   atlas.height = ATLAS_HEIGHT;
@@ -97,9 +94,28 @@ function makeAtlas() {
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = 'bold 83px Georgia, serif';
-    ctx.fillText(String(face.value), TILE * 0.5, TILE * 0.565, TILE * 0.45);
-    if (face.value === 6 || face.value === 9) {
+    // Only the percentile tens die uses two-character labels (00–90).
+    const numeralScale = face.label?.length === 2 ? 0.75 : 1;
+    ctx.font = `bold ${83 * numeralScale}px Georgia, serif`;
+    if (face.markings) {
+      ctx.font = 'bold 48px Georgia, serif';
+      for (const marking of face.markings) {
+        const [u, v] = faceUV(face, marking.point);
+        ctx.save();
+        ctx.translate(u * TILE, v * TILE);
+        ctx.rotate(Math.atan2(u - 0.5, (face.uvCenter ?? 0.55) - v));
+        ctx.fillText(marking.label, 0, 0);
+        ctx.restore();
+      }
+    } else {
+      ctx.fillText(
+        face.label ?? String(face.value),
+        TILE * 0.5,
+        TILE * ((face.uvCenter ?? 0.55) + 0.015),
+        TILE * 0.45 * numeralScale,
+      );
+    }
+    if (!face.label && (face.value === 6 || face.value === 9)) {
       ctx.fillRect(TILE * 0.46, TILE * 0.735, TILE * 0.08, 2);
     }
     ctx.restore();
@@ -182,7 +198,7 @@ void main() {
   gl_FragColor = vec4(pow(clamp(color,0.0,1.0),vec3(1.0/2.2)),1.0);
 }`;
 
-function webglPainter(canvas, atlas) {
+function webglPainter(canvas, atlas, model) {
   const gl = canvas.getContext('webgl', {
     alpha: true,
     antialias: true,
@@ -209,7 +225,7 @@ function webglPainter(canvas, atlas) {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS))
       throw new Error(gl.getProgramInfoLog(program));
     gl.useProgram(program);
-    const mesh = makeMesh();
+    const mesh = makeMesh(model);
     buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
@@ -248,7 +264,7 @@ function webglPainter(canvas, atlas) {
     );
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
-    return (pose, width, height) => {
+    const paint = (pose, width, height) => {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       if (pose.hidden) return;
@@ -256,12 +272,18 @@ function webglPainter(canvas, atlas) {
       gl.uniform3fv(uniforms.uOffset, pose.offset);
       gl.uniform1f(uniforms.uCamera, pose.camera);
       gl.uniform1f(uniforms.uAspect, width / height);
-      gl.uniform1f(uniforms.uOutcome, pose.result === 20 ? 1 : pose.result === 1 ? -1 : 0);
+      gl.uniform1f(uniforms.uOutcome, pose.outcome || 0);
       gl.uniform1f(uniforms.uImpact, pose.impact || 0);
       gl.drawArrays(gl.TRIANGLES, 0, mesh.length / 9);
     };
+    paint.dispose = () => {
+      gl.deleteBuffer(buffer);
+      gl.deleteTexture(texture);
+      gl.deleteProgram(program);
+    };
+    return paint;
   } catch (error) {
-    console.warn('D20: usando renderizado compatible.', error);
+    console.warn('Dados: usando renderizado compatible.', error);
     gl.deleteProgram(program);
     if (buffer) gl.deleteBuffer(buffer);
     if (texture) gl.deleteTexture(texture);
@@ -277,7 +299,7 @@ function project(point, width, height, camera) {
 }
 // Software fallback: subdivide textured triangles BEFORE projection. Numerals still
 // follow their physical face and remain clipped, even without hardware acceleration.
-function canvasPainter(canvas, atlas) {
+function canvasPainter(canvas, atlas, { faces }) {
   const ctx = canvas.getContext('2d');
   function textureTriangle(face, points, projected) {
     const tile = face.value - 1;
@@ -333,9 +355,9 @@ function canvasPainter(canvas, atlas) {
       path(projected);
       const light = 0.3 + Math.max(0, dot(normal, unit([-0.6, 1, 1]))) * 0.7;
       ctx.fillStyle =
-        pose.result === 1
+        pose.outcome === -1
           ? `rgb(${90 * light},${28 * light},${35 * light})`
-          : pose.result === 20
+          : pose.outcome === 1
             ? `rgb(${160 * light},${103 * light},${33 * light})`
             : `rgb(${26 * light},${95 * light},${105 * light})`;
       ctx.fill();
@@ -368,7 +390,8 @@ function canvasPainter(canvas, atlas) {
         ])
           subdivide(child, depth - 1);
       }
-      subdivide(face.points, 2);
+      for (let i = 1; i < face.points.length - 1; i++)
+        subdivide([face.points[0], face.points[i], face.points[i + 1]], 2);
       ctx.restore();
       path(projected);
       ctx.strokeStyle = `rgba(224,183,105,${0.35 + light * 0.5})`;
@@ -447,8 +470,8 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
     ctx.stroke();
     ctx.restore();
   }
-  if (elapsed == null || (pose.result !== 1 && pose.result !== 20)) return;
-  const critical = pose.result === 20,
+  if (elapsed == null || !pose.outcome) return;
+  const critical = pose.outcome === 1,
     t = reduced ? 0.32 : elapsed;
   const fade = Math.max(0, 1 - t / 1.8),
     color = critical ? '255,202,100' : '235,66,79';
@@ -538,15 +561,17 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
   ctx.restore();
 }
 
-export function createD20Renderer(canvas, effectsCanvas) {
-  const atlas = makeAtlas();
-  let paint = webglPainter(canvas, atlas);
+export function createDiceRenderer(canvas, effectsCanvas) {
+  let model = getDiceModel(20),
+    modelKey = '20:number',
+    atlas = makeAtlas(model);
+  let paint = webglPainter(canvas, atlas, model);
   function useSoftwareRenderer() {
     // A canvas whose WebGL initialization failed may no longer accept a 2D context.
     const replacement = canvas.cloneNode();
     canvas.replaceWith(replacement);
     canvas = replacement;
-    paint = canvasPainter(canvas, atlas);
+    paint = canvasPainter(canvas, atlas, model);
   }
   if (!paint) useSoftwareRenderer();
   const effects = effectsCanvas.getContext('2d');
@@ -595,6 +620,7 @@ export function createD20Renderer(canvas, effectsCanvas) {
           surface.height = Math.round(height * ratio);
         }
       }
+      pose.outcome = model.sides === 20 ? (pose.result === 20 ? 1 : pose.result === 1 ? -1 : 0) : 0;
       paint(pose, width, height);
       effects.setTransform(effectsCanvas.width / width, 0, 0, effectsCanvas.height / height, 0, 0);
       paintEffects(effects, width, height, pose, effectTime, reduced);
@@ -619,8 +645,18 @@ export function createD20Renderer(canvas, effectsCanvas) {
     redraw();
   });
   return {
-    start(rollId = 0) {
+    start(rollId = 0, sides = 20, labels = 'number') {
       cancel();
+      if (`${sides}:${labels}` !== modelKey) {
+        model = getDiceModel(sides, labels);
+        modelKey = `${sides}:${labels}`;
+        atlas = makeAtlas(model);
+        paint.dispose?.();
+        observer.unobserve(canvas);
+        paint = webglPainter(canvas, atlas, model);
+        if (!paint) useSoftwareRenderer();
+        observer.observe(canvas);
+      }
       phase = 'waiting';
       throwing = null;
       onLand = null;
@@ -630,9 +666,9 @@ export function createD20Renderer(canvas, effectsCanvas) {
       render(startedAt);
     },
     land(value, callback) {
-      if (!Number.isInteger(value) || value < 1 || value > 20) return;
+      if (!Number.isInteger(value) || value < 1 || value > model.sides) return;
       cancel();
-      throwing = createPhysicalThrow(value, seed);
+      throwing = createPhysicalThrow(value, seed, model.sides);
       phase = 'throwing';
       onLand = callback;
       settledAt = null;
@@ -647,3 +683,6 @@ export function createD20Renderer(canvas, effectsCanvas) {
     },
   };
 }
+
+// Existing integrations can still request the original d20 renderer.
+export { createDiceRenderer as createD20Renderer };

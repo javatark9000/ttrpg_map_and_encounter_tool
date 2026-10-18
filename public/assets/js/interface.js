@@ -64,6 +64,40 @@ export function initInterface(callbacks) {
   $$('[data-page]').forEach((button) =>
     button.addEventListener('click', () => navigate(button.dataset.page)),
   );
+  $('#roll-d20').onclick = () => setDiceMenuOpen($('#dice-menu').hidden, true);
+  $('#roll-d20').onkeydown = (event) => {
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      setDiceMenuOpen(true, true);
+    }
+  };
+  $$('#dice-menu button').forEach((button) => {
+    button.onclick = () => {
+      setDiceMenuOpen(false, true);
+      actions.rollDice?.(+button.dataset.diceSides);
+    };
+  });
+  $('#dice-menu').onkeydown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setDiceMenuOpen(false, true);
+      return;
+    }
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
+      return;
+    event.preventDefault();
+    const buttons = $$('#dice-menu button');
+    const index = buttons.indexOf(document.activeElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : (index + (['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1) + buttons.length) %
+            buttons.length;
+    buttons[next].focus();
+  };
   $('#encounter-toggle').onclick = () => setEncounterOpen(!state.encounterOpen, true);
   $('#encounter-close').onclick = () => setEncounterOpen(false, true);
   $('#requests-toggle').onclick = () => setRequestsOpen(!state.requestsOpen);
@@ -86,6 +120,8 @@ export function initInterface(callbacks) {
     tabs[next]?.focus();
   };
   document.addEventListener('pointerdown', (event) => {
+    if (!$('#dice-menu').contains(event.target) && !$('#roll-d20').contains(event.target))
+      setDiceMenuOpen(false);
     if (
       state.requestsOpen &&
       !$('#requests-panel').contains(event.target) &&
@@ -95,7 +131,10 @@ export function initInterface(callbacks) {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
-    if ($('#session-menu').open) {
+    if (!$('#dice-menu').hidden) {
+      event.preventDefault();
+      setDiceMenuOpen(false, true);
+    } else if ($('#session-menu').open) {
       $('#session-menu').open = false;
       $('#session-menu summary').focus();
     } else if (state.requestsOpen) setRequestsOpen(false, true);
@@ -108,6 +147,14 @@ export function initInterface(callbacks) {
     else if (state.inspectorOpen) showInspector(false);
     else actions.cancelMapAction?.();
   });
+  document.addEventListener('focusin', (event) => {
+    if (!$('#dice-menu').contains(event.target) && !$('#roll-d20').contains(event.target))
+      setDiceMenuOpen(false);
+  });
+  window.addEventListener('resize', positionDiceMenu);
+  window.addEventListener('scroll', positionDiceMenu, true);
+  window.visualViewport?.addEventListener('resize', positionDiceMenu);
+  window.visualViewport?.addEventListener('scroll', positionDiceMenu);
   window.addEventListener('resize', positionRequests);
   window.addEventListener('scroll', positionRequests, true);
   window.visualViewport?.addEventListener('resize', positionRequests);
@@ -129,7 +176,31 @@ export function initInterface(callbacks) {
     }),
   );
 }
+export function setDiceMenuOpen(open, focus = false) {
+  const menu = $('#dice-menu'),
+    button = $('#roll-d20');
+  if (open && (button.disabled || !['DM', 'PLAYER'].includes(state.user?.role))) return;
+  menu.hidden = !open;
+  button.setAttribute('aria-expanded', String(open));
+  if (open) {
+    positionDiceMenu();
+    if (focus) menu.querySelector('button').focus();
+  } else if (focus) button.focus({ preventScroll: true });
+}
+function positionDiceMenu() {
+  const menu = $('#dice-menu');
+  if (menu.hidden) return;
+  const rect = $('#roll-d20').getBoundingClientRect(),
+    viewport = window.visualViewport;
+  const top = viewport?.offsetTop || 0,
+    left = viewport?.offsetLeft || 0;
+  const width = viewport?.width || innerWidth;
+  menu.style.maxHeight = `${Math.max(72, rect.top - top - 20)}px`;
+  menu.style.left = `${Math.max(left + 12, Math.min(rect.right - menu.offsetWidth, left + width - menu.offsetWidth - 12))}px`;
+  menu.style.top = `${Math.max(top + 8, rect.top - menu.offsetHeight - 10)}px`;
+}
 export function navigate(page, focus = false) {
+  setDiceMenuOpen(false);
   if (!state.user || state.user.role === 'GUEST') page = 'map';
   if (!['map', 'worlds', 'characters', 'codex', 'chat'].includes(page)) page = 'map';
   if (page !== 'map') {

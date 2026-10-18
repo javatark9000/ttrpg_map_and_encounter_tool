@@ -18,15 +18,18 @@ import {
   showInspector,
   refreshInterface,
   setRequestsOpen,
+  setDiceMenuOpen,
 } from './js/interface.js';
 import { state } from './js/state.js';
-import { createD20Renderer } from './js/dice.js';
+import { createDiceRenderer } from './js/dice.js';
+import { DICE_SIDES, percentileDice } from './js/dice-models.js';
 
 const DRAW_POINT_MIN_DISTANCE = 0.18;
 let diceHideTimer = null,
   diceRenderer = null,
+  percentileRenderer = null,
   pendingDiceRequestId = null,
-  animatedMapTimer = null;
+  animatedMapMaskKey = null;
 function displayHp(v, t = null) {
   return Math.max(t?.kind === 'PLAYER' || t?.actor_type === 'PLAYER' ? -10 : 0, Number(v ?? 0));
 }
@@ -385,10 +388,7 @@ function connectWs() {
         state.pendingMovementRequestId = null;
         renderMovementRequests();
       }
-      if (m.requestId === pendingDiceRequestId) {
-        pendingDiceRequestId = null;
-        $('#roll-d20').disabled = false;
-      }
+      if (m.requestId === pendingDiceRequestId) resetDiceAnimation();
       if (m.requestId === state.pendingTurn?.requestId) {
         state.pendingTurn = null;
         state.draftRequestId = null;
@@ -408,6 +408,7 @@ function connectWs() {
 async function syncScenarioList() {
   await loadBootstrap();
   if (state.scenarioId && !state.bootstrap.scenarios.some((s) => +s.id === +state.scenarioId)) {
+    resetDiceAnimation();
     state.scenarioId = null;
     state.data = null;
     state.path = [];
@@ -810,20 +811,37 @@ function renderChatWindow(win, messages) {
     .join('');
   box.scrollTop = atEnd ? box.scrollHeight : scroll;
 }
-function startD20Animation(rollId) {
-  diceRenderer ||= createD20Renderer($('#dice-roll-canvas'), $('#dice-effects-canvas'));
-  diceRenderer.start(rollId);
+function startDiceAnimation(rollId, sides) {
+  diceRenderer ||= createDiceRenderer($('#dice-roll-canvas'), $('#dice-effects-canvas'));
+  percentileRenderer?.stop();
+  const percentile = sides === 100;
+  $('#dice-second-body').hidden = !percentile;
+  $('#dice-tens-label').hidden = !percentile;
+  $('#dice-roll-canvas').parentElement.dataset.die = percentile ? 'd10' : `d${sides}`;
+  diceRenderer.start(rollId, percentile ? 10 : sides, percentile ? 'tens' : 'number');
+  if (percentile) {
+    percentileRenderer ||= createDiceRenderer(
+      $('#dice-roll-secondary'),
+      $('#dice-effects-secondary'),
+    );
+    percentileRenderer.start(`${rollId}:units`, 10, 'units');
+  }
 }
 function handleDiceRollStarted(message) {
   if (+message.scenarioId !== +state.scenarioId) return;
   pendingDiceRequestId = null;
   clearTimeout(diceHideTimer);
+  const sides = +(message.sides ?? 20);
+  if (!DICE_SIDES.includes(sides)) return;
+  setDiceMenuOpen(false);
   const overlay = $('#dice-roll-overlay');
   overlay.hidden = false;
   overlay.className = 'rolling';
   overlay.dataset.rollId = String(message.rollId);
-  startD20Animation(message.rollId);
-  $('#dice-roller-name').textContent = `${message.rollerName} lanza un d20`;
+  overlay.dataset.sides = String(sides);
+  startDiceAnimation(message.rollId, sides);
+  $('#dice-roller-name').textContent =
+    `${message.rollerName} lanza ${sides === 100 ? 'un d100 (2 d10)' : `un d${sides}`}`;
   $('#dice-roll-status').textContent = 'Preparando lanzamiento…';
   $('#dice-roll-value').textContent = '?';
   $('#roll-d20').disabled = true;
@@ -838,25 +856,45 @@ function handleDiceRollRevealed(roll) {
   if (+overlay.dataset.rollId !== +roll.id) return;
   clearTimeout(diceHideTimer);
   diceHideTimer = null;
-  const result = +roll.result;
+  const result = +roll.result,
+    sides = +(roll.sides ?? 20);
+  if (
+    !DICE_SIDES.includes(sides) ||
+    +overlay.dataset.sides !== sides ||
+    !Number.isInteger(result) ||
+    result < 1 ||
+    result > sides
+  ) {
+    resetDiceAnimation();
+    toast('El resultado del dado no es válido.');
+    return;
+  }
+  const percentile = sides === 100 ? percentileDice(result) : null;
+  const critical = sides === 20 && result === 20,
+    fumble = sides === 20 && result === 1;
+  let landed = 0;
   overlay.className = 'settling';
-  $('#dice-roll-status').textContent = 'Lanzando…';
-  diceRenderer?.land(result, () => {
+  $('#dice-roll-status').textContent = percentile ? 'Lanzando decenas y unidades…' : 'Lanzando…';
+  const onLand = () => {
     if (+overlay.dataset.rollId !== +roll.id || +state.scenarioId !== +roll.scenario_id) return;
-    overlay.className = `revealed${result === 20 ? ' critical' : result === 1 ? ' fumble' : ''}`;
+    if (++landed !== (percentile ? 2 : 1)) return;
+    overlay.className = `revealed${critical ? ' critical' : fumble ? ' fumble' : ''}`;
     $('#dice-roll-value').textContent = String(result);
-    $('#dice-roll-status').textContent =
-      result === 20
-        ? '¡20 natural · Crítico!'
-        : result === 1
-          ? '¡1 natural · Pifia!'
+    $('#dice-roll-status').textContent = critical
+      ? '¡20 natural · Crítico!'
+      : fumble
+        ? '¡1 natural · Pifia!'
+        : percentile
+          ? percentile.label
           : `Resultado: ${result}`;
     state.lastPublicRoll = roll;
     $('#public-roll').innerHTML =
-      `<div class="public-roll">${icon('dice')}<strong>${result}</strong><span>${esc(roll.roller_name)}<small>Última tirada · d20</small></span></div>`;
-    // Start the reading time at physical rest, never while the die is still bouncing.
-    diceHideTimer = setTimeout(resetDiceAnimation, result === 1 || result === 20 ? 3200 : 2000);
-  });
+      `<div class="public-roll">${icon('dice')}<strong>${result}</strong><span>${esc(roll.roller_name)}<small>Última tirada · d${sides}</small></span></div>`;
+    // Both percentile dice must settle before starting the reading time.
+    diceHideTimer = setTimeout(resetDiceAnimation, critical || fumble || percentile ? 3200 : 2000);
+  };
+  diceRenderer?.land(percentile ? percentile.tens : result, onLand);
+  if (percentile) percentileRenderer?.land(percentile.units, onLand);
   if (state.user?.role === 'DM' && state.data) {
     state.data.diceRolls ||= [];
     if (!state.data.diceRolls.some((item) => +item.id === +roll.id))
@@ -868,6 +906,9 @@ function resetDiceAnimation() {
   clearTimeout(diceHideTimer);
   diceHideTimer = null;
   diceRenderer?.stop();
+  percentileRenderer?.stop();
+  pendingDiceRequestId = null;
+  setDiceMenuOpen(false);
   const overlay = $('#dice-roll-overlay');
   if (overlay) {
     overlay.hidden = true;
@@ -877,8 +918,15 @@ function resetDiceAnimation() {
   const button = $('#roll-d20');
   if (button) button.disabled = false;
 }
-$('#roll-d20').onclick = () => {
-  if (!state.scenarioId || state.ws?.readyState !== 1 || pendingDiceRequestId) {
+function rollDice(sides) {
+  if (
+    !['DM', 'PLAYER'].includes(state.user?.role) ||
+    !DICE_SIDES.includes(sides) ||
+    !state.scenarioId ||
+    state.ws?.readyState !== 1 ||
+    pendingDiceRequestId ||
+    $('#roll-d20').disabled
+  ) {
     toast('No se puede lanzar el dado ahora.');
     return;
   }
@@ -888,10 +936,15 @@ $('#roll-d20').onclick = () => {
     JSON.stringify({
       action: 'dice.roll',
       scenarioId: state.scenarioId,
+      sides,
       requestId: pendingDiceRequestId,
     }),
   );
-};
+  diceHideTimer = setTimeout(() => {
+    resetDiceAnimation();
+    toast('No se recibió confirmación del lanzamiento.');
+  }, 10000);
+}
 function formatCostaRicaTime(roll) {
   const date = roll.created_at_unix
     ? new Date(+roll.created_at_unix * 1000)
@@ -911,7 +964,7 @@ function renderDiceRollLog() {
     ? rolls
         .map(
           (roll) =>
-            `<div class="dice-roll-entry"><span class="roll-result">${+roll.result}</span><div><strong>${esc(roll.roller_name)}</strong><small>${+roll.in_combat ? `En combate${roll.round_no ? ` · Ronda ${+roll.round_no}` : ''}` : 'Fuera de combate'} · Hora CR: ${esc(formatCostaRicaTime(roll))}</small></div><button type="button" class="dice-roll-delete" data-roll-delete="${+roll.id}" aria-label="Eliminar lanzamiento de ${esc(roll.roller_name)}">×</button></div>`,
+            `<div class="dice-roll-entry"><span class="roll-result">${+roll.result}</span><div><strong>${esc(roll.roller_name)}</strong><small>d${+(roll.sides ?? 20)} · ${+roll.in_combat ? `En combate${roll.round_no ? ` · Ronda ${+roll.round_no}` : ''}` : 'Fuera de combate'} · Hora CR: ${esc(formatCostaRicaTime(roll))}</small></div><button type="button" class="dice-roll-delete" data-roll-delete="${+roll.id}" aria-label="Eliminar lanzamiento de ${esc(roll.roller_name)}">×</button></div>`,
         )
         .join('')
     : '<p class="muted">Todavía no hay lanzamientos.</p>';
@@ -1586,11 +1639,13 @@ function draw() {
         }
     ctx.clip();
   }
-  if (s.background_asset_id) {
+  const animatedBackground = s.background_mime === 'image/gif';
+  updateAnimatedMapBackground(s, origin, cs, fogged, restrictVisibility, animatedBackground);
+  if (s.background_asset_id && !animatedBackground) {
     const img = image(+s.background_asset_id);
     if (img.complete && img.naturalWidth)
       ctx.drawImage(img, origin.x, origin.y, +s.width * cs, +s.height * cs);
-  } else {
+  } else if (!s.background_asset_id) {
     ctx.fillStyle = '#291c24';
     ctx.fillRect(origin.x, origin.y, +s.width * cs, +s.height * cs);
   }
@@ -1652,22 +1707,54 @@ function draw() {
   drawVisibilityEffects(cs);
   drawEncounterTokenHighlight(cs);
   if (restrictVisibility) ctx.restore();
-  scheduleAnimatedMapRedraw(s.background_mime === 'image/gif');
 }
-function scheduleAnimatedMapRedraw(animated) {
-  if (!animated) {
-    clearTimeout(animatedMapTimer);
-    animatedMapTimer = null;
+function updateAnimatedMapBackground(s, origin, cs, fogged, restrictVisibility, animated) {
+  const background = $('#animated-map-background');
+  if (!animated || !s.background_asset_id) {
+    background.hidden = true;
+    background.removeAttribute('src');
+    background.style.removeProperty('mask-image');
+    background.style.removeProperty('-webkit-mask-image');
+    delete background.dataset.assetId;
+    animatedMapMaskKey = null;
     return;
   }
-  if (animatedMapTimer) return;
-  animatedMapTimer = setTimeout(
-    () => {
-      animatedMapTimer = null;
-      requestAnimationFrame(draw);
-    },
-    document.hidden ? 250 : 50,
-  );
+  const assetId = String(+s.background_asset_id);
+  if (background.dataset.assetId !== assetId) {
+    background.dataset.assetId = assetId;
+    background.src = `/api/assets/${assetId}`;
+  }
+  background.hidden = false;
+  background.style.left = `${origin.x}px`;
+  background.style.top = `${origin.y}px`;
+  background.style.width = `${+s.width * cs}px`;
+  background.style.height = `${+s.height * cs}px`;
+  if (!restrictVisibility) {
+    if (animatedMapMaskKey !== 'visible') {
+      background.style.removeProperty('mask-image');
+      background.style.removeProperty('-webkit-mask-image');
+      animatedMapMaskKey = 'visible';
+    }
+    return;
+  }
+  const maskKey = `${s.id}:${s.width}x${s.height}:${[...fogged].sort().join(';')}`;
+  if (animatedMapMaskKey === maskKey) return;
+  const mask = document.createElement('canvas');
+  mask.width = +s.width;
+  mask.height = +s.height;
+  const maskContext = mask.getContext('2d');
+  maskContext.fillStyle = '#fff';
+  for (let y = 0; y < +s.height; y++)
+    for (let x = 0; x < +s.width; x++)
+      if (!fogged.has(`${x},${y}`)) maskContext.fillRect(x, y, 1, 1);
+  const image = `url("${mask.toDataURL()}")`;
+  background.style.maskImage = image;
+  background.style.webkitMaskImage = image;
+  background.style.maskSize = '100% 100%';
+  background.style.webkitMaskSize = '100% 100%';
+  background.style.maskRepeat = 'no-repeat';
+  background.style.webkitMaskRepeat = 'no-repeat';
+  animatedMapMaskKey = maskKey;
 }
 function drawEncounterTokenHighlight(cs) {
   const highlighted = state.encounterTokenHighlight;
@@ -2386,8 +2473,8 @@ function setDrawingMode(on) {
   $$('[data-mode]').forEach((x) => x.classList.toggle('active', !on && x.dataset.mode === 'pan'));
   $('#draw-mode').classList.toggle('active', on);
   $('#draw-mode').setAttribute('aria-pressed', String(on));
-  $('#map-hint').hidden = !on;
-  $('#map-hint').textContent = 'Dibuja sobre el mapa. Al salir se borran tus trazos.';
+  $('#map-hint').hidden = true;
+  $('#map-hint').textContent = '';
   refreshInterface();
   updatePasteControl();
   updateDrawButtons();
@@ -3841,6 +3928,7 @@ function participantName(p) {
 }
 
 initInterface({
+  rollDice,
   cancelDraft: cancelEncounterDraft,
   hasSelection: () => !state.encounterSelecting && selectionCount() > 0,
   inspectedToken,

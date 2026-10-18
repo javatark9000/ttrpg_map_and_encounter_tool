@@ -82,6 +82,7 @@
             </div>
             <div id="workspace" hidden>
               <div id="map-wrap">
+                <img id="animated-map-background" alt="" aria-hidden="true" hidden />
                 <canvas
                   id="map"
                   tabindex="0"
@@ -519,11 +520,25 @@
             type="button"
             id="roll-d20"
             class="b-dice-button"
-            aria-label="Lanzar dado de veinte caras"
+            aria-label="Elegir dado"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="dice-menu"
           >
-            <span data-icon="dice"></span><span>d20</span>
+            <span data-icon="dice"></span><span>Dados</span>
           </button>
         </nav>
+      </div>
+      <div id="dice-menu" class="b-dice-menu" role="menu" aria-labelledby="roll-d20" hidden>
+        <button type="button" role="menuitem" data-dice-sides="4">d4<small>1–4</small></button>
+        <button type="button" role="menuitem" data-dice-sides="6">d6<small>1–6</small></button>
+        <button type="button" role="menuitem" data-dice-sides="8">d8<small>1–8</small></button>
+        <button type="button" role="menuitem" data-dice-sides="10">d10<small>1–10</small></button>
+        <button type="button" role="menuitem" data-dice-sides="12">d12<small>1–12</small></button>
+        <button type="button" role="menuitem" data-dice-sides="20">d20<small>1–20</small></button>
+        <button type="button" role="menuitem" data-dice-sides="100">
+          d100<small>Porcentil · 2 d10</small>
+        </button>
       </div>
       <aside id="requests-panel" class="b-requests-panel" aria-labelledby="requests-title" hidden>
         <header>
@@ -566,7 +581,7 @@
           <button id="clear-map-fog" type="button">Revelar todo el mapa</button
           ><button id="encounter-log" type="button">Descargar log de salud del encuentro</button>
         </div>
-        <h3>Registro de d20</h3>
+        <h3>Registro de dados</h3>
         <div id="dice-roll-log"></div>
       </div>
     </dialog>
@@ -624,8 +639,20 @@
       <div class="dice-roll-card">
         <span class="dice-eyebrow" aria-hidden="true">La suerte está echada</span>
         <p id="dice-roller-name"></p>
-        <div class="d20-stage" aria-hidden="true">
-          <canvas id="dice-effects-canvas"></canvas><canvas id="dice-roll-canvas"></canvas>
+        <div class="dice-stages" aria-hidden="true">
+          <div class="dice-body">
+            <div class="d20-stage" data-die="d20">
+              <canvas id="dice-effects-canvas"></canvas><canvas id="dice-roll-canvas"></canvas>
+            </div>
+            <small class="dice-component-label" id="dice-tens-label" hidden>Decenas · 00–90</small>
+          </div>
+          <div class="dice-body" id="dice-second-body" hidden>
+            <div class="d20-stage" data-die="d10">
+              <canvas id="dice-effects-secondary"></canvas
+              ><canvas id="dice-roll-secondary"></canvas>
+            </div>
+            <small class="dice-component-label">Unidades · 0–9</small>
+          </div>
         </div>
         <div class="dice-result" aria-hidden="true">
           <span class="dice-result-rule"></span><strong id="dice-roll-value">?</strong

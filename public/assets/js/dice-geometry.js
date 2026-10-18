@@ -116,8 +116,8 @@ export function slerp(a, b, t) {
   return add(mul(a, Math.sin((1 - t) * angle) / sine), mul(b, Math.sin(t * angle) / sine));
 }
 // Face -> canonical frame (normal +Z, numeral up +Y).
-export function faceOrientation(value) {
-  const face = faces.find((f) => f.value === value);
+export function faceOrientation(value, modelFaces = faces) {
+  const face = modelFaces.find((f) => f.value === value);
   const axis = cross(face.normal, [0, 0, 1]);
   const align = axisRotation(
     Math.hypot(...axis) < 0.0001 ? [1, 0, 0] : axis,
@@ -126,8 +126,11 @@ export function faceOrientation(value) {
   const up = transform(rotationMatrix(align), face.up);
   return quaternionProduct(axisRotation([0, 0, 1], Math.atan2(up[0], up[1])), align);
 }
-// An exact icosahedral symmetry, NOT a correction applied at the end of the throw.
+// An exact polyhedral symmetry (icosahedral for d20), NOT an end-of-throw correction.
 // Every vertex maps onto another vertex, so all physical contacts remain valid.
-export function faceSymmetry(result, restingFace) {
-  return quaternionProduct(conjugate(faceOrientation(restingFace)), faceOrientation(result));
+export function faceSymmetry(result, restingFace, modelFaces = faces) {
+  return quaternionProduct(
+    conjugate(faceOrientation(restingFace, modelFaces)),
+    faceOrientation(result, modelFaces),
+  );
 }

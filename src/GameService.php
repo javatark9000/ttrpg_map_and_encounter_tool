@@ -109,7 +109,7 @@ final class GameService
         $diceRolls =
             $user['role'] === 'DM'
                 ? $this->all(
-                    'SELECT r.id,r.result,r.in_combat,r.round_no,r.created_at,UNIX_TIMESTAMP(r.created_at) created_at_unix,u.name roller_name FROM scenario_dice_rolls r JOIN users u ON u.id=r.roller_id WHERE r.scenario_id=? AND r.revealed_at IS NOT NULL ORDER BY r.id DESC LIMIT 100',
+                    'SELECT r.id,r.sides,r.result,r.in_combat,r.round_no,r.created_at,UNIX_TIMESTAMP(r.created_at) created_at_unix,u.name roller_name FROM scenario_dice_rolls r JOIN users u ON u.id=r.roller_id WHERE r.scenario_id=? AND r.revealed_at IS NOT NULL ORDER BY r.id DESC LIMIT 100',
                     [$scenarioId],
                 )
                 : [];
@@ -316,12 +316,17 @@ final class GameService
         return $row ?: [];
     }
 
-    public function startDiceRoll(int $scenarioId, array $user): array
+    public function startDiceRoll(int $scenarioId, array $user, mixed $sides = 20): array
     {
         if (!in_array($user['role'], ['DM', 'PLAYER'], true)) {
             throw new RuntimeException('Los invitados no pueden lanzar dados.');
         }
-        return Database::transaction(function () use ($scenarioId, $user) {
+        if (!is_int($sides) || !in_array($sides, [4, 6, 8, 10, 12, 20, 100], true)) {
+            throw new RuntimeException(
+                'Tipo de dado inválido. Usa d4, d6, d8, d10, d12, d20 o d100.',
+            );
+        }
+        return Database::transaction(function () use ($scenarioId, $user, $sides) {
             $scenario = $this->one('SELECT * FROM scenarios WHERE id=? FOR UPDATE', [$scenarioId]);
             if (!$scenario || !empty($scenario['is_deleted'])) {
                 throw new RuntimeException('Escenario inexistente.');
@@ -348,14 +353,20 @@ final class GameService
                 [$scenarioId],
             );
             $inCombat = (bool) $encounter;
-            $result = random_int(1, 20);
+            // Percentile: independent tens and units; 00 + 0 represents 100.
+            $result =
+                $sides === 100 ? random_int(0, 9) * 10 + random_int(0, 9) : random_int(1, $sides);
+            if ($result === 0) {
+                $result = 100;
+            }
             $this->db
                 ->prepare(
-                    'INSERT INTO scenario_dice_rolls(scenario_id,roller_id,result,in_combat,round_no) VALUES (?,?,?,?,?)',
+                    'INSERT INTO scenario_dice_rolls(scenario_id,roller_id,sides,result,in_combat,round_no) VALUES (?,?,?,?,?,?)',
                 )
                 ->execute([
                     $scenarioId,
                     $user['id'],
+                    $sides,
                     $result,
                     $inCombat ? 1 : 0,
                     $inCombat ? (int) $encounter['round_no'] : null,
@@ -364,6 +375,7 @@ final class GameService
                 'id' => (int) $this->db->lastInsertId(),
                 'scenarioId' => $scenarioId,
                 'rollerName' => (string) $user['name'],
+                'sides' => $sides,
                 'result' => $result,
                 'inCombat' => $inCombat,
                 'roundNo' => $inCombat ? (int) $encounter['round_no'] : null,
@@ -386,7 +398,7 @@ final class GameService
                 )
                 ->execute([$rollId]);
             return $this->one(
-                'SELECT r.id,r.scenario_id,r.result,r.in_combat,r.round_no,r.created_at,UNIX_TIMESTAMP(r.created_at) created_at_unix,u.name roller_name FROM scenario_dice_rolls r JOIN users u ON u.id=r.roller_id WHERE r.id=?',
+                'SELECT r.id,r.scenario_id,r.sides,r.result,r.in_combat,r.round_no,r.created_at,UNIX_TIMESTAMP(r.created_at) created_at_unix,u.name roller_name FROM scenario_dice_rolls r JOIN users u ON u.id=r.roller_id WHERE r.id=?',
                 [$rollId],
             ) ?:
                 null;

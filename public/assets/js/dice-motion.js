@@ -1,4 +1,5 @@
-import { diceTrajectories } from './dice-trajectories.js';
+import { diceTrajectories, polyhedralTrajectories } from './dice-trajectories.js';
+import { getDiceModel } from './dice-models.js';
 import {
   axisRotation,
   faceSymmetry,
@@ -17,25 +18,28 @@ export const tableOutline = Array.from({ length: 64 }, (_, i) => {
   const angle = (i * Math.PI) / 32;
   return transform(viewMatrix, [Math.cos(angle) * 3.5, -targetHeight, Math.sin(angle) * 3.5]);
 });
-export function createPhysicalThrow(result, seed) {
-  if (!Number.isInteger(result) || result < 1 || result > 20)
-    throw new RangeError('Invalid d20 result');
+export function createPhysicalThrow(result, seed, sides = 20) {
+  const model = getDiceModel(sides);
+  const trajectories = sides === 20 ? diceTrajectories : polyhedralTrajectories[sides];
+  if (!Number.isInteger(result) || result < 1 || result > sides)
+    throw new RangeError('Invalid die result');
   let hash = 2166136261;
   for (const character of String(seed))
     hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;
-  const track = diceTrajectories.tracks[hash % diceTrajectories.tracks.length];
+  const track = trajectories.tracks[hash % trajectories.tracks.length];
   return {
     track,
     result,
-    duration: (track.samples.length - 1) * diceTrajectories.step,
+    step: trajectories.step,
+    duration: (track.samples.length - 1) * trajectories.step,
     // Apply the SAME symmetry to EVERY frame, from release to rest. The die is never
     // steered toward a value, and neither the numbering nor its physical contacts change.
-    symmetry: faceSymmetry(result, track.topFace),
+    symmetry: faceSymmetry(result, track.topFace, model.faces),
   };
 }
 export function samplePhysicalThrow(throwing, seconds) {
   const { track, duration, symmetry, result } = throwing;
-  const frame = Math.max(0, Math.min(track.samples.length - 1, seconds / diceTrajectories.step));
+  const frame = Math.max(0, Math.min(track.samples.length - 1, seconds / throwing.step));
   const index = Math.floor(frame),
     blend = frame - index;
   const a = track.samples[index],

@@ -78,7 +78,7 @@
   border-radius: 50%;
 }
 #dice-roll-overlay.rolling .d20-stage::before {
-  content: 'd20';
+  content: attr(data-die);
   display: grid;
   place-items: center;
   color: #d4bc8780;
@@ -95,13 +95,32 @@
     transform: rotate(360deg);
   }
 }
-#dice-roll-canvas,
-#dice-effects-canvas {
+.d20-stage canvas {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
+}
+.dice-stages {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.dice-body {
+  min-width: 0;
+}
+.dice-component-label {
+  display: block;
+  color: #a7b8bd;
+  font-size: 11px;
+  padding-bottom: 12px;
+}
+#dice-roll-overlay[data-sides='100'] .dice-roll-card {
+  width: min(40rem, 94vw);
+}
+#dice-roll-overlay[data-sides='100'] .d20-stage {
+  width: min(18rem, 40vw, 44dvh);
 }
 .dice-result {
   display: flex;

@@ -401,7 +401,17 @@ summary::-webkit-details-marker {
   overflow: hidden;
   background: #1c151b;
 }
+#animated-map-background {
+  position: absolute;
+  z-index: 0;
+  display: block;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+}
 #map {
+  position: relative;
+  z-index: 1;
   display: block;
   height: 100%;
   width: 100%;
@@ -1280,6 +1290,38 @@ summary::-webkit-details-marker {
 }
 .b-dice-button:hover:not(:disabled) {
   background: linear-gradient(145deg, #c57e58, #a45b48);
+}
+.b-dice-menu {
+  position: fixed;
+  z-index: 34;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #b47f5a88;
+  border-radius: 9px;
+  background: #251822fa;
+  box-shadow: 0 -8px 36px #140a1b88;
+}
+.b-dice-menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 58px;
+  padding: 9px 5px;
+  font-size: 18px;
+  color: #ffe2c5;
+}
+.b-dice-menu small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.b-dice-menu [data-dice-sides='100'] {
+  grid-column: span 2;
 }
 .b-requests-toggle {
   min-width: 91px;
