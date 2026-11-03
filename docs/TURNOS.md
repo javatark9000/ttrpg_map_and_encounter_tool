@@ -1,6 +1,10 @@
 # Motor de turnos: reglas y actualización
 
+Para el flujo de uso desde la interfaz del DM, consulta [ENCOUNTERS_DM.md](ENCOUNTERS_DM.md).
+
 La autoridad sigue en `src/GameService.php`. Los cambios de encuentro se serializan con el bloqueo del escenario y se persisten en una transacción.
+
+La interfaz Brasa mantiene la preparación como borrador local. `encounter.start` admite `prepare: true` con `participants` para preparar e iniciar atómicamente dentro de esa misma transacción. Un inicio rechazado conserva el combate y el historial anteriores; cerrar/cancelar el borrador no envía comandos. El snapshot entrega `canRollbackTurn` únicamente al DM cuando hay historial para devolver.
 
 ## Ciclo
 

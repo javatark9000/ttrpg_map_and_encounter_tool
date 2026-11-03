@@ -10,11 +10,13 @@ import {
   unit,
 } from './dice-geometry.js';
 
-export const DICE_SIDES = [4, 6, 8, 10, 12, 20, 100];
+export const DICE_SIDES = [2, 4, 6, 8, 10, 12, 20, 100];
+export const diceResultLabel = (sides, result) =>
+  +sides === 2 ? (+result === 1 ? 'NO' : 'Cara') : String(result);
 const models = new Map();
 
 function polyhedron(sides, vertices, polygons) {
-  const faces = polygons.map((polygon) => {
+  const faces = polygons.map((polygon, faceIndex) => {
     let indices = [...polygon];
     const center = mul(indices.map((i) => vertices[i]).reduce(add, [0, 0, 0]), 1 / indices.length);
     let normal = unit(
@@ -46,11 +48,12 @@ function polyhedron(sides, vertices, polygons) {
       uvScale: 0.43 / extent,
       uvCenter: 0.5,
       value: 0,
+      rim: sides === 2 && faceIndex > 1,
     };
   });
   let value = 1;
   for (const face of faces) {
-    if (face.value) continue;
+    if (face.rim || face.value) continue;
     face.value = value++;
     const opposite = faces.find((other) => dot(face.normal, other.normal) < -0.999);
     if (opposite) opposite.value = sides + 1 - face.value;
@@ -70,11 +73,27 @@ function polyhedron(sides, vertices, polygons) {
 
 export function getDiceModel(sides = 20, labels = 'number') {
   if (sides === 20) return { sides, vertices: icoVertices, faces: icoFaces, resultDirection: 1 };
-  if (![4, 6, 8, 10, 12].includes(sides)) throw new RangeError('Invalid physical die');
+  if (![2, 4, 6, 8, 10, 12].includes(sides)) throw new RangeError('Invalid physical die');
   const key = `${sides}:${labels}`;
   if (models.has(key)) return models.get(key);
   let vertices, polygons;
-  if (sides === 4) {
+  if (sides === 2) {
+    const segments = 40;
+    vertices = [];
+    for (const z of [0.11, -0.11])
+      for (let i = 0; i < segments; i++)
+        vertices.push([
+          Math.cos((i * Math.PI * 2) / segments),
+          Math.sin((i * Math.PI * 2) / segments),
+          z,
+        ]);
+    polygons = [
+      Array.from({ length: segments }, (_, i) => i),
+      Array.from({ length: segments }, (_, i) => i + segments),
+    ];
+    for (let i = 0; i < segments; i++)
+      polygons.push([i, (i + 1) % segments, ((i + 1) % segments) + segments, i + segments]);
+  } else if (sides === 4) {
     vertices = [
       [1, 1, 1],
       [1, -1, -1],

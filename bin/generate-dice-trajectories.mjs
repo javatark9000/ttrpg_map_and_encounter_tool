@@ -53,7 +53,10 @@ function simulate(seed, sides) {
         }),
         position: new Vec3(0, PHYSICS.minHeight + random() * PHYSICS.heightRange, 0),
         velocity: new Vec3(1.4 + random() * 0.9, -0.5, (random() - 0.5) * 0.8),
-        angularVelocity: new Vec3(4 + random() * 6, (random() - 0.5) * 10, 5 + random() * 7),
+        // Give only the coin extra flips; keep every other die's original launch unchanged.
+        angularVelocity: new Vec3(4 + random() * 6, (random() - 0.5) * 10, 5 + random() * 7).scale(
+            sides === 2 ? 3 : 1,
+        ),
         linearDamping: 0.12,
         angularDamping: 0.2,
         allowSleep: true,
@@ -88,12 +91,15 @@ function simulate(seed, sides) {
     }
     const last = samples.at(-1),
         matrix = rotationMatrix(last.slice(3));
-    const top = faces.reduce((best, face) =>
-        dot(transform(matrix, face.normal), [0, resultDirection, 0]) >
-        dot(transform(matrix, best.normal), [0, resultDirection, 0])
-            ? face
-            : best,
-    );
+    // A coin must settle on a cap, never on its edge.
+    const top = faces
+        .filter((face) => !face.rim)
+        .reduce((best, face) =>
+            dot(transform(matrix, face.normal), [0, resultDirection, 0]) >
+            dot(transform(matrix, best.normal), [0, resultDirection, 0])
+                ? face
+                : best,
+        );
     if (
         die.sleepState !== Body.SLEEPING ||
         dot(transform(matrix, top.normal), [0, resultDirection, 0]) < 0.999 ||
@@ -112,10 +118,19 @@ function simulate(seed, sides) {
         ...unit(quaternionProduct(yaw, sample.slice(3))),
     ]);
     if (normalized.some(([x, , z]) => Math.abs(x) > 2.1 || Math.abs(z) > 1.65)) return null;
+    // Reject solver overlaps that are too large for the thin coin; do not alter its poses.
+    if (
+        sides === 2 &&
+        normalized.some((sample) => {
+            const rotation = rotationMatrix(sample.slice(3));
+            return vertices.some((v) => transform(rotation, v)[1] + sample[1] < -0.02);
+        })
+    )
+        return null;
     return { seed, topFace: top.value, impacts, samples: normalized };
 }
 const models = {};
-for (const sides of [20, 4, 6, 8, 10, 12]) {
+for (const sides of [20, 4, 6, 8, 10, 12, 2]) {
     const tracks = [];
     for (let seed = 741; tracks.length < COUNT && seed < 5000; seed++) {
         const track = simulate(seed, sides);
@@ -140,4 +155,4 @@ const content =
     encode(models) +
     ';\n';
 writeFileSync(output, content);
-console.log(`Generated 48 trajectories (${(content.length / 1024).toFixed(1)} KiB).`);
+console.log(`Generated 56 trajectories (${(content.length / 1024).toFixed(1)} KiB).`);

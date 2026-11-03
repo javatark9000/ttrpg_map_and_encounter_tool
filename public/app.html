@@ -530,14 +530,27 @@
         </nav>
       </div>
       <div id="dice-menu" class="b-dice-menu" role="menu" aria-labelledby="roll-d20" hidden>
+        <button
+          type="button"
+          role="menuitem"
+          data-dice-sides="2"
+          aria-label="Lanzar moneda: NO o Cara"
+        >
+          d2<small>Moneda</small>
+        </button>
         <button type="button" role="menuitem" data-dice-sides="4">d4<small>1–4</small></button>
         <button type="button" role="menuitem" data-dice-sides="6">d6<small>1–6</small></button>
         <button type="button" role="menuitem" data-dice-sides="8">d8<small>1–8</small></button>
         <button type="button" role="menuitem" data-dice-sides="10">d10<small>1–10</small></button>
         <button type="button" role="menuitem" data-dice-sides="12">d12<small>1–12</small></button>
         <button type="button" role="menuitem" data-dice-sides="20">d20<small>1–20</small></button>
-        <button type="button" role="menuitem" data-dice-sides="100">
-          d100<small>Porcentil · 2 d10</small>
+        <button
+          type="button"
+          role="menuitem"
+          data-dice-sides="100"
+          aria-label="Lanzar d100 porcentil con dos d10"
+        >
+          d100<small>2 d10</small>
         </button>
       </div>
       <aside id="requests-panel" class="b-requests-panel" aria-labelledby="requests-title" hidden>

@@ -164,6 +164,14 @@
     0 0 65px #ae233228,
     inset 0 0 65px #8a172322;
 }
+#dice-roll-overlay[data-sides='2'].fumble .dice-roll-card {
+  --dice-accent: #e4ad85;
+  border-color: #b47755;
+  box-shadow:
+    0 25px 90px #000b,
+    0 0 65px #9e542c28,
+    inset 0 0 65px #6d35191c;
+}
 #dice-roll-overlay.critical #dice-roll-status,
 #dice-roll-overlay.fumble #dice-roll-status {
   color: var(--dice-accent);

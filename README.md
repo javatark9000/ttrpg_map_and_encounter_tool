@@ -16,6 +16,7 @@ Aplicación web responsive para administrar mapas, jugadores y encuentros de jue
 - Desempate manual soportado por el backend y turnos retrasados vinculados.
 - Ocultamiento de NPC con vida 0 para jugadores y X roja para el DM.
 - Estado independiente por escenario, eventos versionados, comandos idempotentes y resincronización por snapshot.
+- Selector de dados d2 (moneda), d4, d6, d8, d10, d12, d20 y d100, con animación física y resultado autoritativo. El porcentil utiliza dos d10; `00 + 0 = 100`. La moneda plateada muestra NO (cobre agrietado) o el logo (dorado con brillo).
 
 ## Requisitos
 
@@ -90,13 +91,18 @@ Si se sirve con otro host/puerto, actualizar `APP_ORIGIN`. Para producción, mod
 - `database/schema.sql`: esquema MariaDB.
 - `bin/websocket.php`: proceso WebSocket Workerman.
 - `docs/ARCHITECTURE.md`: mapa para localizar cada tipo de cambio.
+- `docs/FUNCIONES_PUBLICO.md`: guía enumerada del perfil público o invitado.
+- `docs/FUNCIONES_JUGADOR.md`: guía enumerada del perfil jugador.
+- `docs/FUNCIONES_DM.md`: guía enumerada de capacidades y límites del perfil DM.
+- `docs/ENCOUNTERS_DM.md`: guía de uso de encounters, iniciativas y turnos para el DM.
+- `docs/INTERFAZ_BRASA.md`: nueva distribución visual y ubicación de las funciones conservadas.
 - `PLAN_IMPLEMENTACION.md`: planificación y decisiones del proyecto.
 
 ## Desarrollo y validación
 
 Instalar las herramientas de desarrollo una vez con `npm ci` (Node.js 22+). Prettier mantiene legibles los archivos PHP, JavaScript, HTML y CSS.
 
-El movimiento del d20 utiliza trayectorias físicas precalculadas con `cannon-es`. Si se cambia el collider o la configuración física de `bin/generate-dice-trajectories.mjs`, ejecutar `npm run dice:generate` e incluir el recurso generado `public/assets/js/dice-trajectories.js`. No requiere compilar ni cargar un motor físico al desplegar o jugar.
+El movimiento de los dados utiliza trayectorias físicas precalculadas con `cannon-es`, ocho por geometría. Las ocho trayectorias originales del d20 se conservan. Las instalaciones existentes necesitan aplicar `database/migrations/007_polyhedral_dice.sql` antes de desplegar el soporte multidado y reiniciar WebSocket. Si se cambian las geometrías de `dice-models.js`, el collider o la configuración física de `bin/generate-dice-trajectories.mjs`, ejecutar `npm run dice:generate` e incluir el recurso generado `public/assets/js/dice-trajectories.js`. No requiere compilar ni cargar un motor físico al desplegar o jugar.
 
 ```bash
 npm run format:check

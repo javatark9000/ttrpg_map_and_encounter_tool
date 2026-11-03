@@ -2,6 +2,15 @@
 import { add, sub, mul, dot, cross, unit, rotationMatrix, transform } from './dice-geometry.js';
 import { createPhysicalThrow, samplePhysicalThrow, tableOutline } from './dice-motion.js';
 import { getDiceModel } from './dice-models.js';
+import {
+  loadCoinLogo,
+  paintCoinFace,
+  coinCrackShader,
+  coinCracks,
+  softwareCoinAtlas,
+  coinMetalColor,
+  paintCoinSilhouette,
+} from './dice-coin.js';
 
 const TILE = 256,
   ATLAS_WIDTH = TILE * 4,
@@ -34,7 +43,11 @@ function makeMesh({ vertices, faces }) {
   const edges = new Map();
   faces.forEach((face) => {
     for (let i = 1; i < face.points.length - 1; i++)
-      triangle([face.points[0], face.points[i], face.points[i + 1]], face.normal, face);
+      triangle(
+        [face.points[0], face.points[i], face.points[i + 1]],
+        face.normal,
+        face.rim ? null : face,
+      );
     for (let i = 0; i < face.indices.length; i++) {
       const a = face.indices[i],
         b = face.indices[(i + 1) % face.indices.length];
@@ -69,7 +82,7 @@ function makeMesh({ vertices, faces }) {
   return new Float32Array(data);
 }
 
-function makeAtlas({ faces }) {
+function makeAtlas({ faces, sides }, logo = null) {
   const atlas = document.createElement('canvas');
   atlas.width = ATLAS_WIDTH;
   atlas.height = ATLAS_HEIGHT;
@@ -77,9 +90,15 @@ function makeAtlas({ faces }) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, atlas.width, atlas.height);
   faces.forEach((face) => {
+    if (face.rim) return;
     const tile = face.value - 1;
     ctx.save();
     ctx.translate((tile % 4) * TILE, Math.floor(tile / 4) * TILE);
+    if (sides === 2) {
+      paintCoinFace(ctx, face, TILE, logo);
+      ctx.restore();
+      return;
+    }
     // A restrained inset line, engraved into the same surface.
     ctx.strokeStyle = '#555';
     ctx.lineWidth = 1.2;
@@ -152,6 +171,9 @@ precision mediump float;
 uniform sampler2D uAtlas;
 uniform float uOutcome;
 uniform float uImpact;
+uniform float uCoin;
+uniform float uCoinReveal;
+uniform float uCoinShine;
 uniform mediump float uCamera;
 varying vec3 vPosition;
 varying vec3 vNormal;
@@ -159,6 +181,7 @@ varying vec3 vLocal;
 varying vec2 vUV;
 varying float vBevel;
 const float PI = 3.14159265;
+${coinCrackShader}
 vec3 fresnel(float cosine, vec3 f0) { return f0 + (1.0-f0)*pow(1.0-cosine, 5.0); }
 vec3 light(vec3 position, vec3 color, vec3 n, vec3 v, vec3 base, float metal, float rough) {
   vec3 l = normalize(position-vPosition), h = normalize(l+v);
@@ -182,6 +205,14 @@ void main() {
   float gilded = max(ink, vBevel);
   vec3 base = mix(resin,vec3(0.65,0.4,0.14),gilded);
   float metal = mix(0.3,0.82,gilded), rough = mix(0.29,0.24,gilded)+grain*0.012;
+  if (uCoin > 0.5) {
+    vec3 finish = uOutcome > 0.0 ? vec3(0.72,0.44,0.095) : vec3(0.64,0.245,0.085);
+    base = mix(vec3(0.52,0.60,0.68), finish, uCoinReveal) * (1.0 - ink * 0.8);
+    float reeding = pow(0.5 + 0.5 * cos(atan(vLocal.y,vLocal.x)*120.0), 12.0) * vBevel;
+    base *= 1.0 - reeding * 0.25;
+    metal = 0.93;
+    rough = 0.24 + ink * 0.12 + reeding * 0.06 + grain * 0.008;
+  }
   vec3 color = light(vec3(-3.5,4.0,5.0),vec3(5.5,4.8,3.8),n,v,base,metal,rough);
   color += light(vec3(4.0,0.5,2.0),vec3(1.7,2.7,3.6),n,v,base,metal,rough);
   color += light(vec3(-1.0,-3.0,1.0),vec3(0.6,1.2,1.4),n,v,base,metal,rough);
@@ -193,7 +224,17 @@ void main() {
   color += base*0.18;
   color *= 1.0+etch*0.28*(1.0-vBevel);
   vec3 flare = uOutcome>0.0 ? vec3(0.8,0.35,0.04) : vec3(0.5,0.015,0.025);
-  color += flare*uImpact*abs(uOutcome)*(0.12+0.3*pow(1.0-max(dot(n,v),0.0),2.0));
+  if (uCoin > 0.5) {
+    if (uOutcome < -0.5) {
+      float crack = coinFracture(vLocal.xy) * (1.0-vBevel) * smoothstep(1.02-uCoinReveal*0.8, 1.06-uCoinReveal*0.8, length(vLocal.xy));
+      color *= 1.0 - crack * 0.88 * uCoinReveal;
+    } else if (uOutcome > 0.5) {
+      float band = exp(-pow((vLocal.x-vLocal.y*0.3-mix(-1.3,1.3,1.0-uCoinShine))*7.0,2.0));
+      color += vec3(0.7,0.48,0.16) * band * uCoinShine * uCoinReveal * 0.5;
+    }
+  } else {
+    color += flare*uImpact*abs(uOutcome)*(0.12+0.3*pow(1.0-max(dot(n,v),0.0),2.0));
+  }
   color = (color*(2.51*color+0.03))/(color*(2.43*color+0.59)+0.14);
   gl_FragColor = vec4(pow(clamp(color,0.0,1.0),vec3(1.0/2.2)),1.0);
 }`;
@@ -257,10 +298,17 @@ function webglPainter(canvas, atlas, model) {
         Math.min(4, gl.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT)),
       );
     const uniforms = Object.fromEntries(
-      ['uRotation', 'uOffset', 'uCamera', 'uAspect', 'uOutcome', 'uImpact'].map((name) => [
-        name,
-        gl.getUniformLocation(program, name),
-      ]),
+      [
+        'uRotation',
+        'uOffset',
+        'uCamera',
+        'uAspect',
+        'uOutcome',
+        'uImpact',
+        'uCoin',
+        'uCoinReveal',
+        'uCoinShine',
+      ].map((name) => [name, gl.getUniformLocation(program, name)]),
     );
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
@@ -274,7 +322,15 @@ function webglPainter(canvas, atlas, model) {
       gl.uniform1f(uniforms.uAspect, width / height);
       gl.uniform1f(uniforms.uOutcome, pose.outcome || 0);
       gl.uniform1f(uniforms.uImpact, pose.impact || 0);
+      gl.uniform1f(uniforms.uCoin, model.sides === 2 ? 1 : 0);
+      gl.uniform1f(uniforms.uCoinReveal, pose.coinReveal || 0);
+      gl.uniform1f(uniforms.uCoinShine, pose.coinShine || 0);
       gl.drawArrays(gl.TRIANGLES, 0, mesh.length / 9);
+    };
+    paint.updateAtlas = (replacement) => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, replacement);
+      gl.generateMipmap(gl.TEXTURE_2D);
     };
     paint.dispose = () => {
       gl.deleteBuffer(buffer);
@@ -299,8 +355,9 @@ function project(point, width, height, camera) {
 }
 // Software fallback: subdivide textured triangles BEFORE projection. Numerals still
 // follow their physical face and remain clipped, even without hardware acceleration.
-function canvasPainter(canvas, atlas, { faces }) {
+function canvasPainter(canvas, atlas, { faces, sides, vertices }) {
   const ctx = canvas.getContext('2d');
+  if (sides === 2) atlas = softwareCoinAtlas(atlas);
   function textureTriangle(face, points, projected) {
     const tile = face.value - 1;
     const uv = points.map((p) => {
@@ -335,11 +392,17 @@ function canvasPainter(canvas, atlas, { faces }) {
     points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
     ctx.closePath();
   }
-  return (pose, width, height) => {
+  const paint = (pose, width, height) => {
     ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
     ctx.clearRect(0, 0, width, height);
     if (pose.hidden) return;
     const m = rotationMatrix(pose.rotation);
+    if (pose.coin)
+      paintCoinSilhouette(
+        ctx,
+        vertices.map((p) => project(add(transform(m, p), pose.offset), width, height, pose.camera)),
+        coinMetalColor(pose.outcome, pose.coinReveal, 0.7),
+      );
     const visible = faces
       .map((face) => ({
         face,
@@ -360,13 +423,44 @@ function canvasPainter(canvas, atlas, { faces }) {
           : pose.outcome === 1
             ? `rgb(${160 * light},${103 * light},${33 * light})`
             : `rgb(${26 * light},${95 * light},${105 * light})`;
+      if (pose.coin) {
+        const xs = projected.map((p) => p[0]),
+          ys = projected.map((p) => p[1]);
+        const metal = ctx.createLinearGradient(
+          Math.min(...xs),
+          Math.min(...ys),
+          Math.max(...xs) + 1,
+          Math.max(...ys) + 1,
+        );
+        for (const [stop, strength] of [
+          [0, 0.66],
+          [0.28, 1],
+          [0.5, 0.77],
+          [0.7, 0.94],
+          [1, 0.58],
+        ])
+          metal.addColorStop(
+            stop,
+            coinMetalColor(pose.outcome, pose.coinReveal, strength * (0.6 + light * 0.4)),
+          );
+        ctx.fillStyle = metal;
+      }
       ctx.fill();
       // Screen blending discards the black texture background, retaining gilded markings.
       ctx.save();
       path(projected);
       ctx.clip();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = 0.5 + light * 0.4;
+      if (pose.coin && pose.outcome > 0 && pose.coinShine > 0) {
+        const x = width * (-0.2 + (1 - pose.coinShine) * 1.4);
+        const glow = ctx.createLinearGradient(x - width * 0.15, 0, x + width * 0.15, 0);
+        glow.addColorStop(0, 'transparent');
+        glow.addColorStop(0.5, `rgba(255,245,200,${pose.coinShine * pose.coinReveal * 0.35})`);
+        glow.addColorStop(1, 'transparent');
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, width, height);
+      }
+      ctx.globalCompositeOperation = pose.coin ? 'multiply' : 'screen';
+      ctx.globalAlpha = pose.coin ? 1 : 0.5 + light * 0.4;
       function subdivide(points, depth) {
         if (!depth) {
           textureTriangle(
@@ -390,15 +484,47 @@ function canvasPainter(canvas, atlas, { faces }) {
         ])
           subdivide(child, depth - 1);
       }
-      for (let i = 1; i < face.points.length - 1; i++)
-        subdivide([face.points[0], face.points[i], face.points[i + 1]], 2);
+      if (!face.rim)
+        for (let i = 1; i < face.points.length - 1; i++)
+          subdivide([face.points[0], face.points[i], face.points[i + 1]], pose.coin ? 1 : 2);
       ctx.restore();
+      if (pose.coin && face.value === 1 && pose.outcome < 0 && pose.coinReveal > 0) {
+        ctx.save();
+        path(projected);
+        ctx.clip();
+        ctx.strokeStyle = `rgba(60,25,12,${pose.coinReveal * 0.9})`;
+        ctx.lineWidth = 1.2;
+        const crackPoint = (point) =>
+          project(
+            add(transform(m, [...point, face.center[2]]), pose.offset),
+            width,
+            height,
+            pose.camera,
+          );
+        for (const crack of coinCracks) {
+          ctx.beginPath();
+          ctx.moveTo(...crackPoint(crack[0]));
+          for (let i = 0; i < crack.length - 1; i++) {
+            const amount = Math.max(0, Math.min(1, pose.coinReveal * (crack.length - 1) - i));
+            if (!amount) break;
+            ctx.lineTo(...crackPoint(crack[i].map((v, j) => v + (crack[i + 1][j] - v) * amount)));
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       path(projected);
-      ctx.strokeStyle = `rgba(224,183,105,${0.35 + light * 0.5})`;
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = pose.coin
+        ? coinMetalColor(pose.outcome, pose.coinReveal, 0.85 + light * 0.15)
+        : `rgba(224,183,105,${0.35 + light * 0.5})`;
+      ctx.lineWidth = face.rim ? 0.7 : 1.5;
       ctx.stroke();
     }
   };
+  paint.updateAtlas = (replacement) => {
+    atlas = sides === 2 ? softwareCoinAtlas(replacement) : replacement;
+  };
+  return paint;
 }
 
 function paintEffects(ctx, width, height, pose, elapsed, reduced) {
@@ -408,7 +534,7 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
     [cx, cy] = project(pose.ground, width, height, pose.camera),
     [bodyX, bodyY] = project(pose.offset, width, height, pose.camera),
     radius = (height * 0.5 * LENS) / (pose.camera - pose.ground[2]),
-    airborne = Math.max(0, pose.height - 0.8);
+    airborne = Math.max(0, pose.height - (pose.restHeight ?? 0.8));
   // A visible contact plane gives the bounce height a reference. The camera zooms
   // into this same table; neither the floor nor the die changes scale in world space.
   ctx.save();
@@ -424,7 +550,7 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
   felt.addColorStop(0.75, '#1a2c3240');
   felt.addColorStop(1, '#111d2200');
   ctx.beginPath();
-  tableOutline.forEach((point, i) => {
+  (pose.tableOutline || tableOutline).forEach((point, i) => {
     const [x, y] = project(point, width, height, pose.camera);
     if (i) ctx.lineTo(x, y);
     else ctx.moveTo(x, y);
@@ -473,8 +599,8 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
   if (elapsed == null || !pose.outcome) return;
   const critical = pose.outcome === 1,
     t = reduced ? 0.32 : elapsed;
-  const fade = Math.max(0, 1 - t / 1.8),
-    color = critical ? '255,202,100' : '235,66,79';
+  const fade = Math.max(0, 1 - t / 1.8) * (pose.coin && critical ? 0.55 : 1),
+    color = critical ? '255,202,100' : pose.coin ? '218,133,82' : '235,66,79';
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
   const halo = ctx.createRadialGradient(
@@ -507,7 +633,7 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
     );
     ctx.stroke();
     if (critical) {
-      for (let i = 0; i < 42; i++) {
+      for (let i = 0; i < (pose.coin ? 14 : 42); i++) {
         const angle = i * 2.39996,
           speed = 0.15 + (i % 7) * 0.024,
           radius = unitSize * (0.18 + speed * t);
@@ -564,6 +690,7 @@ function paintEffects(ctx, width, height, pose, elapsed, reduced) {
 export function createDiceRenderer(canvas, effectsCanvas) {
   let model = getDiceModel(20),
     modelKey = '20:number',
+    coinLogo = null,
     atlas = makeAtlas(model);
   let paint = webglPainter(canvas, atlas, model);
   function useSoftwareRenderer() {
@@ -620,7 +747,18 @@ export function createDiceRenderer(canvas, effectsCanvas) {
           surface.height = Math.round(height * ratio);
         }
       }
-      pose.outcome = model.sides === 20 ? (pose.result === 20 ? 1 : pose.result === 1 ? -1 : 0) : 0;
+      pose.coin = model.sides === 2;
+      pose.outcome =
+        model.sides === 20 || pose.coin
+          ? pose.result === model.sides
+            ? 1
+            : pose.result === 1
+              ? -1
+              : 0
+          : 0;
+      const reveal = pose.settled ? (reduced ? 1 : Math.min(1, effectTime / 0.7)) : 0;
+      pose.coinReveal = reveal * reveal * (3 - 2 * reveal);
+      pose.coinShine = !reduced && pose.settled ? Math.max(0, 1 - effectTime / 1.6) : 0;
       paint(pose, width, height);
       effects.setTransform(effectsCanvas.width / width, 0, 0, effectsCanvas.height / height, 0, 0);
       paintEffects(effects, width, height, pose, effectTime, reduced);
@@ -650,12 +788,22 @@ export function createDiceRenderer(canvas, effectsCanvas) {
       if (`${sides}:${labels}` !== modelKey) {
         model = getDiceModel(sides, labels);
         modelKey = `${sides}:${labels}`;
-        atlas = makeAtlas(model);
+        atlas = makeAtlas(model, coinLogo);
         paint.dispose?.();
         observer.unobserve(canvas);
         paint = webglPainter(canvas, atlas, model);
         if (!paint) useSoftwareRenderer();
         observer.observe(canvas);
+      }
+      if (sides === 2 && !coinLogo) {
+        loadCoinLogo().then((logo) => {
+          if (!logo) return;
+          coinLogo = logo;
+          if (model.sides !== 2) return;
+          atlas = makeAtlas(model, coinLogo);
+          paint.updateAtlas(atlas);
+          redraw();
+        });
       }
       phase = 'waiting';
       throwing = null;

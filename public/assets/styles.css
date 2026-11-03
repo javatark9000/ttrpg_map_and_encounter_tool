@@ -1320,9 +1320,6 @@ summary::-webkit-details-marker {
   font-size: 10px;
   color: var(--muted);
 }
-.b-dice-menu [data-dice-sides='100'] {
-  grid-column: span 2;
-}
 .b-requests-toggle {
   min-width: 91px;
 }

@@ -321,9 +321,9 @@ final class GameService
         if (!in_array($user['role'], ['DM', 'PLAYER'], true)) {
             throw new RuntimeException('Los invitados no pueden lanzar dados.');
         }
-        if (!is_int($sides) || !in_array($sides, [4, 6, 8, 10, 12, 20, 100], true)) {
+        if (!is_int($sides) || !in_array($sides, [2, 4, 6, 8, 10, 12, 20, 100], true)) {
             throw new RuntimeException(
-                'Tipo de dado inválido. Usa d4, d6, d8, d10, d12, d20 o d100.',
+                'Tipo de dado inválido. Usa d2 (moneda), d4, d6, d8, d10, d12, d20 o d100.',
             );
         }
         return Database::transaction(function () use ($scenarioId, $user, $sides) {

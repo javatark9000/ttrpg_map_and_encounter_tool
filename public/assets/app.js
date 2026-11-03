@@ -22,7 +22,7 @@ import {
 } from './js/interface.js';
 import { state } from './js/state.js';
 import { createDiceRenderer } from './js/dice.js';
-import { DICE_SIDES, percentileDice } from './js/dice-models.js';
+import { DICE_SIDES, percentileDice, diceResultLabel } from './js/dice-models.js';
 
 const DRAW_POINT_MIN_DISTANCE = 0.18;
 let diceHideTimer = null,
@@ -841,7 +841,7 @@ function handleDiceRollStarted(message) {
   overlay.dataset.sides = String(sides);
   startDiceAnimation(message.rollId, sides);
   $('#dice-roller-name').textContent =
-    `${message.rollerName} lanza ${sides === 100 ? 'un d100 (2 d10)' : `un d${sides}`}`;
+    `${message.rollerName} lanza ${sides === 2 ? 'una moneda (d2)' : sides === 100 ? 'un d100 (2 d10)' : `un d${sides}`}`;
   $('#dice-roll-status').textContent = 'Preparando lanzamiento…';
   $('#dice-roll-value').textContent = '?';
   $('#roll-d20').disabled = true;
@@ -870,8 +870,10 @@ function handleDiceRollRevealed(roll) {
     return;
   }
   const percentile = sides === 100 ? percentileDice(result) : null;
-  const critical = sides === 20 && result === 20,
-    fumble = sides === 20 && result === 1;
+  const coin = sides === 2,
+    label = diceResultLabel(sides, result);
+  const critical = (sides === 20 || coin) && result === sides,
+    fumble = (sides === 20 || coin) && result === 1;
   let landed = 0;
   overlay.className = 'settling';
   $('#dice-roll-status').textContent = percentile ? 'Lanzando decenas y unidades…' : 'Lanzando…';
@@ -879,17 +881,21 @@ function handleDiceRollRevealed(roll) {
     if (+overlay.dataset.rollId !== +roll.id || +state.scenarioId !== +roll.scenario_id) return;
     if (++landed !== (percentile ? 2 : 1)) return;
     overlay.className = `revealed${critical ? ' critical' : fumble ? ' fumble' : ''}`;
-    $('#dice-roll-value').textContent = String(result);
-    $('#dice-roll-status').textContent = critical
-      ? '¡20 natural · Crítico!'
-      : fumble
-        ? '¡1 natural · Pifia!'
-        : percentile
-          ? percentile.label
-          : `Resultado: ${result}`;
+    $('#dice-roll-value').textContent = label;
+    $('#dice-roll-status').textContent = coin
+      ? result === 1
+        ? 'NO'
+        : 'Cara · Moneda dorada'
+      : critical
+        ? '¡20 natural · Crítico!'
+        : fumble
+          ? '¡1 natural · Pifia!'
+          : percentile
+            ? percentile.label
+            : `Resultado: ${result}`;
     state.lastPublicRoll = roll;
     $('#public-roll').innerHTML =
-      `<div class="public-roll">${icon('dice')}<strong>${result}</strong><span>${esc(roll.roller_name)}<small>Última tirada · d${sides}</small></span></div>`;
+      `<div class="public-roll">${icon('dice')}<strong>${esc(label)}</strong><span>${esc(roll.roller_name)}<small>Última tirada · ${coin ? 'Moneda (d2)' : `d${sides}`}</small></span></div>`;
     // Both percentile dice must settle before starting the reading time.
     diceHideTimer = setTimeout(resetDiceAnimation, critical || fumble || percentile ? 3200 : 2000);
   };
@@ -964,7 +970,7 @@ function renderDiceRollLog() {
     ? rolls
         .map(
           (roll) =>
-            `<div class="dice-roll-entry"><span class="roll-result">${+roll.result}</span><div><strong>${esc(roll.roller_name)}</strong><small>d${+(roll.sides ?? 20)} · ${+roll.in_combat ? `En combate${roll.round_no ? ` · Ronda ${+roll.round_no}` : ''}` : 'Fuera de combate'} · Hora CR: ${esc(formatCostaRicaTime(roll))}</small></div><button type="button" class="dice-roll-delete" data-roll-delete="${+roll.id}" aria-label="Eliminar lanzamiento de ${esc(roll.roller_name)}">×</button></div>`,
+            `<div class="dice-roll-entry"><span class="roll-result">${esc(diceResultLabel(roll.sides ?? 20, +roll.result))}</span><div><strong>${esc(roll.roller_name)}</strong><small>d${+(roll.sides ?? 20)} · ${+roll.in_combat ? `En combate${roll.round_no ? ` · Ronda ${+roll.round_no}` : ''}` : 'Fuera de combate'} · Hora CR: ${esc(formatCostaRicaTime(roll))}</small></div><button type="button" class="dice-roll-delete" data-roll-delete="${+roll.id}" aria-label="Eliminar lanzamiento de ${esc(roll.roller_name)}">×</button></div>`,
         )
         .join('')
     : '<p class="muted">Todavía no hay lanzamientos.</p>';
