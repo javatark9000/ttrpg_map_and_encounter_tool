@@ -1987,7 +1987,7 @@ function drawSelectionDraft(cs) {
 function drawMapObject(t, cs, alpha = 1) {
   ctx.save();
   ctx.globalAlpha *= alpha;
-  const selected = state.selectedObjects.has(+t.id),
+  const selected = state.user?.role === 'DM' && state.selectedObjects.has(+t.id),
     widthCells = Math.max(1, +t.width_cells || 1),
     heightCells = Math.max(1, +t.height_cells || 1),
     visualWidth = Math.max(0.25, widthCells - 0.75),
@@ -1996,8 +1996,10 @@ function drawMapObject(t, cs, alpha = 1) {
     width = visualWidth * cs,
     height = visualHeight * cs,
     img = t.image_asset_id ? image(+t.image_asset_id) : null;
-  ctx.fillStyle = '#b88d52';
-  ctx.fillRect(p.x, p.y, width, height);
+  if (selected) {
+    ctx.fillStyle = '#b88d52';
+    ctx.fillRect(p.x, p.y, width, height);
+  }
   if (img?.complete && img.naturalWidth) {
     ctx.save();
     ctx.beginPath();
@@ -2006,9 +2008,12 @@ function drawMapObject(t, cs, alpha = 1) {
     ctx.drawImage(img, p.x, p.y, width, height);
     ctx.restore();
   }
-  ctx.strokeStyle = selected ? '#fff19b' : '#e0b66f';
-  ctx.lineWidth = selected ? Math.max(3, cs * 0.06) : Math.max(1, cs * 0.025);
-  ctx.strokeRect(p.x, p.y, width, height);
+  // Image-less objects keep an outline, but images retain their own transparent edges.
+  if (selected || !img) {
+    ctx.strokeStyle = selected ? '#fff19b' : '#e0b66f';
+    ctx.lineWidth = selected ? Math.max(3, cs * 0.06) : Math.max(1, cs * 0.025);
+    ctx.strokeRect(p.x, p.y, width, height);
+  }
   ctx.restore();
 }
 function groupTokens() {

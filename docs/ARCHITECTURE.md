@@ -119,6 +119,10 @@ La selección múltiple del DM habilita **Copiar** cuando contiene al menos dos 
 
 Los fondos admiten JPEG, PNG, WebP y GIF con un máximo de 15 MB. El servidor valida el contenido real mediante `getimagesize()` y no confía únicamente en la extensión o el MIME enviado por el navegador. Los GIF se muestran como una imagen animada nativa debajo del Canvas, porque algunos navegadores conservan únicamente el primer fotograma al copiar un GIF a Canvas. Esa capa sigue la misma posición y escala de la cámara; para jugadores e invitados aplica una máscara de casillas visibles generada en memoria, por lo que la niebla no revela la animación. JPEG, PNG y WebP continúan dibujándose en Canvas. Ningún fondo recibe filtros decorativos de brillo o saturación ni sombra degradada; la niebla y los bloqueos mantienen sus superposiciones funcionales.
 
+### Objetos del mapa
+
+`drawMapObject()` conserva el canal alfa de las imágenes: no añade relleno ni marco mientras el objeto no esté seleccionado. Solo el DM ve el fondo y el marco de sus objetos seleccionados; la selección permanece local y no se publica por WebSocket. Los objetos sin imagen conservan un contorno simple, sin fondo, para poder localizarlos. Se mantienen las dimensiones, la niebla, los efectos de visibilidad y los permisos de objetos y assets del servidor.
+
 ### Transitabilidad de casillas
 
 La herramienta **Transitabilidad** unifica bloquear y desbloquear con los mismos gestos que la niebla: botón izquierdo para hacer transitable, derecho para bloquear y `Ctrl` + arrastre para aplicar la acción a un rectángulo. En táctil, toca o arrastra para habilitar el paso y mantén pulsado para bloquear. El botón central desplaza el mapa sin pintar y el pellizco cancela el trazo pendiente.
